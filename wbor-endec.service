@@ -1,0 +1,17 @@
+[Unit]
+Description=wbor-endec
+Requires={DEVICE}
+After={DEVICE}
+After=network.target
+
+[Service]
+ExecStart={PYTHON_EXEC} {SCRIPT_PATH} {OPTIONS}
+WorkingDirectory=
+User=
+Restart=always
+RestartSec=10
+StandardOutput=inherit
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
