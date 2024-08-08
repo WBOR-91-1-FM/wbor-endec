@@ -27,6 +27,7 @@ parser.add_argument(
     "-g",
     "--groupme",
     dest="groupmeBotId",
+    nargs="+",
     help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
 )
 args = parser.parse_args()
@@ -64,12 +65,14 @@ class GroupMe(Webhook):
         segments = [body[i : i + 500] for i in range(0, len(body), 500)]
 
         for segment in segments:
-            # Schema: https://dev.groupme.com/docs/v3#bots_post
-            self.payload = {"bot_id": args.groupmeBotId.trim(), "text": segment}
+            # Forward to all bots specified
+            for bot_id in args.groupmeBotId:
+                # Schema: https://dev.groupme.com/docs/v3#bots_post
+                self.payload = {"bot_id": bot_id, "text": segment}
 
-            logging.info("Making POST to GroupMe with payload: %s", self.payload)
-            response = requests.post(self.url, headers=self.headers, json=self.payload)
-            logging.info("GroupMe's response: %s", response.text)
+                logging.info("Making POST to GroupMe with payload: %s", self.payload)
+                response = requests.post(self.url, headers=self.headers, json=self.payload)
+                logging.info("GroupMe's response: %s", response.text)
 
 
 def post():
