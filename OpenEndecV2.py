@@ -27,7 +27,6 @@ parser.add_argument(
     "-g",
     "--groupme",
     dest="groupmeBotId",
-    nargs=1,
     help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
 )
 args = parser.parse_args()
@@ -36,7 +35,6 @@ requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
 if not any(getattr(args, arg) for arg in requiredArgs.values()):
     argList = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
     parser.error(f"At least one of the following arguments must be provided: {argList}")
-
 
 class Webhook:
     def __init__(self, url=None):
@@ -57,20 +55,21 @@ class Webhook:
 
 class GroupMe(Webhook):
     def post(self, messageContent):
-        footer = "\n------"
-        
         self.url = "https://api.groupme.com/v3/bots/post"
-        self.payload = {
-            # https://dev.groupme.com/docs/v3#bots_post
-            "bot_id": args.groupmeBotId[0],
-            "text": f"{messageContent}{footer}"
-        }
 
-        logging.info("Making POST to GroupMe with payload: %s", self.payload)
-        response = requests.post(
-            self.url, headers=self.headers, json=self.payload
-        )
-        logging.info("GroupMe's response: %s", response.text)
+        footer = "\n\nThis message was sent using OpenENDEC V2.1 [https://github.com/WBOR-91-1-FM/wbor-endec]\n----------"
+        body = f"{messageContent}{footer}"
+
+        # Split body into 500 character segments (max length for GroupMe messages)
+        segments = [body[i : i + 500] for i in range(0, len(body), 500)]
+
+        for segment in segments:
+            # Schema: https://dev.groupme.com/docs/v3#bots_post
+            self.payload = {"bot_id": args.groupmeBotId.trim(), "text": segment}
+
+            logging.info("Making POST to GroupMe with payload: %s", self.payload)
+            response = requests.post(self.url, headers=self.headers, json=self.payload)
+            logging.info("GroupMe's response: %s", response.text)
 
 
 def post():
