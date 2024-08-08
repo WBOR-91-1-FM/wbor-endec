@@ -46,7 +46,9 @@ class Webhook:
     def post(self, messageContent):
         self.payload = {"message": messageContent}
 
-        logging.info("Making POST to %s with payload: %s", self.url, self.payload)
+        logging.info(
+            "Making POST to %s with payload: %s", self.url, json.dumps(self.payload)
+        )
         response = requests.post(
             self.url, headers=self.headers, json=json.dumps(self.payload)
         )
@@ -62,7 +64,7 @@ class GroupMe(Webhook):
             "text": messageContent,
         }
 
-        logging.info("Making POST to GroupMe with payload: %s", self.payload)
+        logging.info("Making POST to GroupMe with payload: %s", json.dumps(self.payload))
         response = requests.post(
             self.url, headers=self.headers, json=json.dumps(self.payload)
         )
@@ -108,19 +110,19 @@ def newsFeed():
             logging.info("Connected to serial port %s", args.port)
             if ser.isOpen():
                 while True:
-                    serialText = ser.readline().decode("utf-8")
+                    serialText = ser.readline().decode("utf-8").strip()
                     if "<ENDECSTART>" in serialText:
                         activeAlert = True
                     elif "<ENDECEND>" in serialText:
                         messageContent = "".join(
                             dataList[:-1]
-                        )  # Remove the EAS protocol
+                        ).strip()  # Remove the EAS protocol and strip trailing newlines
                         dataList = []
                         activeAlert = False
                         post()
                     else:
                         if activeAlert:
-                            dataList.append(serialText)
+                            dataList.append(serialText + "\n\n")
         except SerialException as e:
             logging.error("Serial exception: %s", e)
         except Exception as e:
