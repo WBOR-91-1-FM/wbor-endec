@@ -2,13 +2,15 @@ import os, json, sys, argparse, requests, serial, time, logging
 from serial import Serial
 from serial.serialutil import SerialException
 
+LOGFILE = "openendec.log"
+
 logging.basicConfig(
-    filename="openendec.log",
+    filename=LOGFILE,
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-content = ""
+messageContent = ""
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -16,60 +18,108 @@ parser.add_argument(
     "--com",
     dest="port",
     default="/dev/ttyUSB0",
-    help="Select the port the device is on. (e.g. /dev/ttyUSB0)",
-    required=True,
+    help="Select the port the device is on. Default is /dev/ttyUSB0",
 )
 parser.add_argument(
-    "-w",
-    "--webhook",
-    dest="webhook",
-    nargs="+",
-    default="",
-    help="Webhook(s) to send to.",
-    required=True,
+    "-w", "--webhook", dest="webhookUrls", nargs="+", help="Webhook URL(s) to send to."
+)
+parser.add_argument(
+    "-g",
+    "--groupme",
+    dest="groupmeBotId",
+    nargs=1,
+    help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
 )
 args = parser.parse_args()
-port = args.port
-webhooks = args.webhook
+requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
+
+if not any(getattr(args, arg) for arg in requiredArgs.values()):
+    argList = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
+    parser.error(f"At least one of the following arguments must be provided: {argList}")
 
 
-def main():
-    global content
-    payload = {"content": content}
+class Webhook:
+    def __init__(self, url=None):
+        self.headers = {"Content-Type": "application/json"}
+        self.url = url
+
+    def post(self, messageContent):
+        self.payload = {"message": messageContent}
+
+        logging.info("Making POST to %s with payload: %s", self.url, self.payload)
+        response = requests.post(
+            self.url, headers=self.headers, json=json.dumps(self.payload)
+        )
+        logging.info("Response from %s: %s", self.url, response.text)
+
+
+class GroupMe(Webhook):
+    def post(self, messageContent):
+        self.url = "https://api.groupme.com/v3/bots/post"
+        self.payload = {
+            # https://dev.groupme.com/docs/v3#bots_post
+            "bot_id": args.groupmeBotId,
+            "text": messageContent,
+        }
+
+        logging.info("Making POST to GroupMe with payload: %s", self.payload)
+        response = requests.post(
+            self.url, headers=self.headers, json=json.dumps(self.payload)
+        )
+        logging.info("GroupMe's response: %s", response.text)
+
+
+def post():
+    """
+    Send News Feed object message payload to specified webhooks.
+
+    Raises:
+        requests.exceptions.RequestException: If the request to a webhook fails.
+    """
+    global messageContent
+    payload = {"message": messageContent}
     logging.info("Payload: %s", payload)
-    logging.info("Sending to Webhooks: %s", webhooks)
 
-    header_data = {"content-type": "application/json"}
-    for webhook in webhooks:
-        try:
-            response = requests.post(webhook, json.dumps(payload), headers=header_data)
-            response.raise_for_status()
-            logging.info("Successfully posted to %s", webhook)
-        except requests.exceptions.RequestException as e:
-            logging.error("Failed to post to %s: %s", webhook, e)
-    content = ""
+    # Post to each webhook URL provided
+    if args.webhookUrls:
+        for url in args.webhookUrls:
+            Webhook(url).post(messageContent)
+
+    # Post to GroupMe if bot ID is provided
+    if args.groupmeBotId:
+        GroupMe().post(messageContent)
+
+    messageContent = ""
 
 
 def newsFeed():
+    """
+    Continuously decodes News Feed objects from the provided serial port.
+
+    Raises:
+        serial.SerialException: If the serial connection fails.
+    """
     serialText = ""
     dataList = []
-    global content
+    global messageContent
     activeAlert = False
 
     while True:
         try:
-            ser = serial.Serial(port=port, baudrate=9600, bytesize=8, stopbits=1)
-            logging.info("Connected to serial port %s", port)
+            ser = serial.Serial(args.port, baudrate=9600, bytesize=8, stopbits=1)
+            logging.info("Connected to serial port %s", args.port)
             if ser.isOpen():
                 while True:
                     serialText = ser.readline().decode("utf-8")
                     if "<ENDECSTART>" in serialText:
                         activeAlert = True
                     elif "<ENDECEND>" in serialText:
-                        content = "".join(dataList)
+                        messageContent = "".join(
+                            dataList[:-1]
+                        )  # Remove the EAS protocol
                         dataList = []
                         activeAlert = False
-                        main()
+                        post()
                     else:
                         if activeAlert:
                             dataList.append(serialText)
@@ -80,14 +130,13 @@ def newsFeed():
         finally:
             if ser.isOpen():
                 ser.close()
-                logging.info("Closed serial port %s", port)
+                logging.info("Closed serial port %s", args.port)
             logging.info("Reconnecting to serial port...")
-            # Sleep or wait before reconnecting
-            time.sleep(5)
+            time.sleep(5)  # Wait before trying to reconnect
 
 
 if __name__ == "__main__":
     logging.info(
-        "OpenENDEC V2\nOriginally Written By: Evan Vander Stoep [https://github.com/EvanVS]\nModified by: Mason Daugherty [https://github.com/mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\nLogger Started!"
+        f"OpenENDEC V2\nOriginally Written By: Evan Vander Stoep [https://github.com/EvanVS]\nModified by: Mason Daugherty [https://github.com/mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\nLogger Started!\nLogs will be stored at {LOGFILE}"
     )
     newsFeed()
