@@ -48,6 +48,34 @@ GroupMe bot(s) to forward EAS messages to.
 
     {OPTIONS} specifies the destinations OpenEndec should forward EAS messages to.
 
+## Running as a System Service
+
+```sh
+sudo nano /etc/systemd/system/wbor-endec.service
+```
+
+Reference the template at `wbor-endec.service`.
+
+You will need to change:
+
+* `ExecStart`
+  * `PYTHON_EXEC` = directory for your Python executable, e.g. `/usr/bin/python3`
+  * `SCRIPT_PATH` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
+  * `OPTIONS` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
+* `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
+* `User` = username for the user running OpenEndec
+
+After saving, run:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl start wbor-endec.service
+sudo systemctl enable wbor-endec.service
+sudo systemctl status wbor-endec.service
+```
+
+Look for `active (running)` and the `openendec.log` file to confirm it is up and running.
+
 ## To-do
 
 * Argument validation
