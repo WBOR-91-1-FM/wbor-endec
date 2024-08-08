@@ -58,7 +58,7 @@ class GroupMe(Webhook):
         self.url = "https://api.groupme.com/v3/bots/post"
         self.payload = {
             # https://dev.groupme.com/docs/v3#bots_post
-            "bot_id": args.groupmeBotId,
+            "bot_id": args.groupmeBotId[0],
             "text": messageContent,
         }
 
@@ -77,8 +77,6 @@ def post():
         requests.exceptions.RequestException: If the request to a webhook fails.
     """
     global messageContent
-    payload = {"message": messageContent}
-    logging.info("Payload: %s", payload)
 
     # Post to each webhook URL provided
     if args.webhookUrls:
