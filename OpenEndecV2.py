@@ -58,7 +58,7 @@ class GroupMe(Webhook):
     def post(self, messageContent):
         self.url = "https://api.groupme.com/v3/bots/post"
 
-        footer = "\n\nThis message was sent using OpenENDEC V2.1 [https://github.com/WBOR-91-1-FM/wbor-endec]\n----------"
+        footer = "\n\nThis message was sent using OpenENDEC V2.1 [github/WBOR-91-1-FM/wbor-endec]\n----------"
         body = f"{messageContent}{footer}"
 
         # Split body into 500 character segments (max length for GroupMe messages)
