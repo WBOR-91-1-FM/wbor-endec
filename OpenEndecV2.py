@@ -105,6 +105,7 @@ def newsFeed():
     dataList = []
     global messageContent
     activeAlert = False
+    i = 0
 
     while True:
         try:
@@ -121,10 +122,13 @@ def newsFeed():
                         )  # Remove the EAS protocol
                         dataList = []
                         activeAlert = False
+                        i = 0
                         post()
                     else:
                         if activeAlert:
                             dataList.append(serialText)
+                            logging.info("Line #%d: %s", i, serialText)
+                            i += 1
         except SerialException as e:
             logging.error("Serial exception: %s", e)
         except Exception as e:
