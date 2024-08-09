@@ -11,6 +11,7 @@ logging.basicConfig(
 )
 
 messageContent = ""
+eas = ""
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -38,7 +39,15 @@ group.add_argument(
     dest="trim",
     action="store_true",
     default=False,
-    help="Trim the EAS message from the body before sending.",
+    help="Trim the EAS message from the body before sending, destroying it. \"message\" will contain the human readable text.",
+)
+group.add_argument(
+    "-f",
+    "--fork",
+    dest="fork",
+    action="store_true",
+    default=False,
+    help="Trim the EAS message from the body and send it as \"eas\" in the webhook payload. \"message\" will contain the human readable text.",
 )
 group.add_argument(
     "-q",
@@ -46,7 +55,7 @@ group.add_argument(
     dest="quiet",
     action="store_true",
     default=False,
-    help="Trim the human readable text from the message before sending.",
+    help="Trim the human readable text from the message before sending. destroying it. Only the EAS message will be sent (as \"message\").",
 )
 
 args = parser.parse_args()
@@ -58,12 +67,16 @@ if not any(getattr(args, arg) for arg in requiredArgs.values()):
 
 
 class Webhook:
-    def __init__(self, url=None):
+    def __init__(self, url=None, eas=None):
         self.headers = {"Content-Type": "application/json"}
         self.url = url
+        self.eas = eas
 
     def post(self, messageContent):
         self.payload = {"message": messageContent}
+
+        if self.eas:
+            self.payload["eas"] = self.eas
 
         logging.info(
             "Making POST to %s with payload: %s", self.url, json.dumps(self.payload)
@@ -105,17 +118,19 @@ def post():
         requests.exceptions.RequestException: If the request to a webhook fails.
     """
     global messageContent
+    global eas
 
     # Post to each webhook URL provided
     if args.webhookUrls:
         for url in args.webhookUrls:
-            Webhook(url).post(messageContent)
+            Webhook(url, eas).post(messageContent)
 
     # Post to GroupMe if bot ID is provided
     if args.groupmeBotId:
         GroupMe().post(messageContent)
 
     messageContent = ""
+    eas = ""
 
 
 def newsFeed():
@@ -128,6 +143,7 @@ def newsFeed():
     serialText = ""
     dataList = []
     global messageContent
+    global eas
     activeAlert = False
     i = 0
 
@@ -144,6 +160,9 @@ def newsFeed():
                         if args.trim:
                             dataList.pop()
 
+                        if args.fork:
+                            eas = dataList.pop()
+                            
                         if args.quiet:
                             dataList = [dataList[-1]]
 
