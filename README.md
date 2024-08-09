@@ -91,3 +91,9 @@ sudo systemctl status wbor-endec.service
 ```
 
 Look for `active (running)` and the `openendec.log` file to confirm it is up and running.
+
+After updating, run:
+
+```sh
+sudo systemctl start wbor-endec.service
+```
