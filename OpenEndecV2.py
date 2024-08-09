@@ -31,6 +31,14 @@ parser.add_argument(
     nargs="+",
     help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
 )
+parser.add_argument(
+    "-d",
+    "--debug",
+    dest="debug",
+    action="store_true",
+    default=False,
+    help="Enable debug logging.",
+)
 
 group = parser.add_mutually_exclusive_group()
 group.add_argument(
@@ -39,7 +47,7 @@ group.add_argument(
     dest="trim",
     action="store_true",
     default=False,
-    help="Trim the EAS message from the body before sending, destroying it. \"message\" will contain the human readable text.",
+    help='Trim the EAS message from the body before sending, destroying it. "message" will contain the human readable text ONLY.',
 )
 group.add_argument(
     "-f",
@@ -47,7 +55,7 @@ group.add_argument(
     dest="fork",
     action="store_true",
     default=False,
-    help="Trim the EAS message from the body and send it as \"eas\" in the webhook payload. \"message\" will contain the human readable text.",
+    help='Trim the EAS message from the body and send it as "eas" in the webhook payload. "message" will contain the human readable text.',
 )
 group.add_argument(
     "-q",
@@ -55,7 +63,7 @@ group.add_argument(
     dest="quiet",
     action="store_true",
     default=False,
-    help="Trim the human readable text from the message before sending. destroying it. Only the EAS message will be sent (as \"message\").",
+    help='Trim the human readable text from the message before sending. destroying it. ONLY the EAS message will be sent (as "message").',
 )
 
 args = parser.parse_args()
@@ -64,6 +72,9 @@ requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
 if not any(getattr(args, arg) for arg in requiredArgs.values()):
     argList = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
     parser.error(f"At least one of the following arguments must be provided: {argList}")
+
+if args.debug:
+    logging.basicConfig(level=logging.DEBUG)
 
 
 class Webhook:
@@ -103,11 +114,15 @@ class GroupMe(Webhook):
                 # Schema: https://dev.groupme.com/docs/v3#bots_post
                 self.payload = {"bot_id": bot_id, "text": segment}
 
-                logging.info("Making POST to GroupMe with payload: %s", self.payload)
+                logging.debug("Making POST to GroupMe with payload: %s", self.payload)
+                logging.info("Making POST to GroupMe")
                 response = requests.post(
                     self.url, headers=self.headers, json=self.payload
                 )
-                logging.info("GroupMe's response: %s", response.text)
+                if response.text:
+                    logging.debug("GroupMe's response: %s", response.text)
+                else:
+                    logging.info("GroupMe POST successful")
 
 
 def post():
@@ -162,7 +177,7 @@ def newsFeed():
 
                         if args.fork:
                             eas = dataList.pop()
-                            
+
                         if args.quiet:
                             dataList = [dataList[-1]]
 
@@ -174,7 +189,7 @@ def newsFeed():
                     else:
                         if activeAlert:
                             dataList.append(serialText)
-                            logging.info("Line #%d: %s", i, serialText)
+                            logging.debug("Line #%d: %s", i, serialText)
                             i += 1
         except SerialException as e:
             logging.error("Serial exception: %s", e)
