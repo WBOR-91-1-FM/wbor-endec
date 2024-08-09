@@ -1,30 +1,46 @@
 # OpenEndec V2.1
 
-An Open Source EAS ENDEC Logger, tuned for college radio stations such as [WBOR 91.1 FM](https://wbor.org).
+> [!WARNING]
+> **DO NOT RELY ON THIS PROGRAM WHEN LOSS, DAMAGE, INJURY OR DEATH MAY OCCUR!**
+> **ALWAYS, ALWAYS HAVE MULTIPLE METHODS TO RECEIVE EMERGENCY ALERTS.**
+>
+> THIS IS *NOT* AN EAS DECODER
 
-This repo contains scripts to log alerts recieved by the Sage Digital ENDEC Hardware Unit to a webhook/external destination.
+An Open Source EAS ENDEC Logger to transmit News Feed messages recieved by a Sage Digital ENDEC Hardware Unit to a webhook/external destination.
 
-[Info about the EAS protocol specification](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31)
+News Feed spec: [section 9.4 (pg. 70) of the ENDEC manual](https://www.sagealertingsystems.com/docs/digital_endec_1_0.pdf)
+
+EAS protocol specification: [47 CFR 11.31](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31)
+
+## Features
+
+> - [x] Supports multiple concurrent transmission destinations
+> - [ ] Argument validation
+
+**Destinations:**
+
+> - [x] Generic webhook
+> - [x] GroupMe
+> - [ ] Discord
+> - [ ] Email (SMTP)
+> - [ ] Twilio
+> - [ ] ???
 
 ## Options
 
-### Generic Webhook
+`--trim / -t`: Trim the EAS message from the body before sending, which is always the final line. EAS messages follow the [format](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31): `ZCZC-ORG-EEE-PSSCCC + TTTT-JJJHHMM-LLLLLLLL-`
 
-```sh
--w {URL_1, URL_2, ...}
-```
+`--quiet / -q`: Trim the human readable message body, leaving ONLY the EAS message.
 
-Webhook URL(s) to forward EAS messages to.
+### Destinations
 
-### GroupMe
+`--webhook / -w {URL_1, URL_2, ...}`: Webhook URL(s) to forward EAS messages to.
 
-```sh
--g {BOT_ID_1, BOT_ID_2, ...}
-```
-
-GroupMe bot(s) to forward EAS messages to.
+`--groupme / -g {BOT_ID_1, BOT_ID_2, ...}`: GroupMe bot(s) to forward EAS messages to.
 
 ## Installation
+
+**Example scenario:**
 
 1. In Sage's [EndecSetD](https://www.sagealertingsystems.com/support-pc.htm), set one of the DB-9 serial COM ports on your ENDEC to output "News Feed". See [section 9.4 (pg. 70) of the ENDEC manual](https://www.sagealertingsystems.com/docs/digital_endec_1_0.pdf) for more info.
 2. Use a [USB to RS-232 serial adapter](https://amzn.to/46FljxQ) to connect the News Feed COM port of your ENDEC to a computer. We're using a [Raspberry Pi Zero 2 W](https://amzn.to/3WEdPX7) (with a [Micro USB to female USB-A adapter](https://amzn.to/3WzT27f)), though any computer that can run Python and connect to the internet should work fine.
@@ -48,7 +64,7 @@ GroupMe bot(s) to forward EAS messages to.
 
     {OPTIONS} specifies the destinations OpenEndec should forward EAS messages to.
 
-## Running as a System Service
+### Running as a System Service
 
 ```sh
 sudo nano /etc/systemd/system/wbor-endec.service
@@ -75,7 +91,3 @@ sudo systemctl status wbor-endec.service
 ```
 
 Look for `active (running)` and the `openendec.log` file to confirm it is up and running.
-
-## To-do
-
-* Argument validation
