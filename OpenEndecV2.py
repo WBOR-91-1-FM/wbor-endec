@@ -120,7 +120,7 @@ class GroupMe(Webhook):
                     self.url, headers=self.headers, json=self.payload
                 )
                 if response.text:
-                    logging.debug("GroupMe's response: %s", response.text)
+                    logging.error("GroupMe's response: %s", response.text)
                 else:
                     logging.info("GroupMe POST successful")
 
