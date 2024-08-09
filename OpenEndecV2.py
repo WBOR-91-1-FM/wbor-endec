@@ -7,7 +7,7 @@ LOGFILE = "openendec.log"
 logging.basicConfig(
     filename=LOGFILE,
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s : %(message)s",
 )
 
 messageContent = ""
@@ -30,12 +30,32 @@ parser.add_argument(
     nargs="+",
     help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
 )
+
+group = parser.add_mutually_exclusive_group()
+group.add_argument(
+    "-t",
+    "--trim",
+    dest="trim",
+    action="store_true",
+    default=False,
+    help="Trim the EAS message from the body before sending.",
+)
+group.add_argument(
+    "-q",
+    "--quiet",
+    dest="quiet",
+    action="store_true",
+    default=False,
+    help="Trim the human readable text from the message before sending.",
+)
+
 args = parser.parse_args()
 requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
 
 if not any(getattr(args, arg) for arg in requiredArgs.values()):
     argList = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
     parser.error(f"At least one of the following arguments must be provided: {argList}")
+
 
 class Webhook:
     def __init__(self, url=None):
@@ -71,7 +91,9 @@ class GroupMe(Webhook):
                 self.payload = {"bot_id": bot_id, "text": segment}
 
                 logging.info("Making POST to GroupMe with payload: %s", self.payload)
-                response = requests.post(self.url, headers=self.headers, json=self.payload)
+                response = requests.post(
+                    self.url, headers=self.headers, json=self.payload
+                )
                 logging.info("GroupMe's response: %s", response.text)
 
 
@@ -119,9 +141,13 @@ def newsFeed():
                     if "<ENDECSTART>" in serialText:
                         activeAlert = True
                     elif "<ENDECEND>" in serialText:
-                        messageContent = "".join(
+                        if args.trim:
                             dataList[:-1]
-                        )  # Remove the EAS protocol
+
+                        if args.quiet:
+                            dataList = [dataList[-1]]
+
+                        messageContent = "".join(dataList)
                         dataList = []
                         activeAlert = False
                         i = 0
