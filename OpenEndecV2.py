@@ -142,7 +142,7 @@ def newsFeed():
                         activeAlert = True
                     elif "<ENDECEND>" in serialText:
                         if args.trim:
-                            dataList[:-1]
+                            dataList.pop()
 
                         if args.quiet:
                             dataList = [dataList[-1]]
@@ -171,6 +171,6 @@ def newsFeed():
 
 if __name__ == "__main__":
     logging.info(
-        f"OpenENDEC V2\nOriginally Written By: Evan Vander Stoep [https://github.com/EvanVS]\nModified by: Mason Daugherty [https://github.com/mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\nLogger Started!\nLogs will be stored at {LOGFILE}"
+        f"OpenENDEC V2.1\nOriginally Written By: Evan Vander Stoep [https://github.com/EvanVS]\nModified by: Mason Daugherty [https://github.com/mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\nLogger Started!\nLogs will be stored at {LOGFILE}"
     )
     newsFeed()
