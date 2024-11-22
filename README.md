@@ -74,12 +74,12 @@ Reference the template at `wbor-endec.service`.
 
 You will need to change:
 
-* `ExecStart`
-  * `PYTHON_EXEC` = directory for your Python executable, e.g. `/usr/bin/python3`
-  * `SCRIPT_PATH` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
-  * `OPTIONS` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
-* `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
-* `User` = username for the user running OpenEndec
+- `ExecStart`
+  - `PYTHON_EXEC` = directory for your Python executable, e.g. `/usr/bin/python3`
+  - `SCRIPT_PATH` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
+  - `OPTIONS` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
+- `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
+- `User` = username for the user running OpenEndec
 
 After saving, run:
 

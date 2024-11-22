@@ -1,4 +1,16 @@
-import os, json, sys, argparse, requests, serial, time, logging
+"""
+Module to decode EAS messages from a Sage Digital ENDEC.
+
+Options allow for forwarding of decoded messages to a webhook URL or a GroupMe group.
+"""
+import os
+import json
+import sys
+import argparse
+import logging
+import time
+import requests
+import serial
 from serial import Serial
 from serial.serialutil import SerialException
 
@@ -10,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s : %(message)s",
 )
 
-messageContent = ""
+message_content = ""
 eas = ""
 
 parser = argparse.ArgumentParser()
@@ -47,7 +59,9 @@ group.add_argument(
     dest="trim",
     action="store_true",
     default=False,
-    help='Trim the EAS message from the body before sending, destroying it. "message" will contain the human readable text ONLY.',
+    help=('Trim the EAS message from the body before sending, destroying it.'
+          '"message" will contain the human readable text ONLY.'
+    ),
 )
 group.add_argument(
     "-f",
@@ -55,7 +69,10 @@ group.add_argument(
     dest="fork",
     action="store_true",
     default=False,
-    help='Trim the EAS message from the body and send it as "eas" in the webhook payload. "message" will contain the human readable text.',
+    help=(
+        'Trim the EAS message from the body and send it as "eas" in the webhook '
+        'payload. "message" will contain the human readable text.'
+    ),
 )
 group.add_argument(
     "-q",
@@ -63,28 +80,39 @@ group.add_argument(
     dest="quiet",
     action="store_true",
     default=False,
-    help='Trim the human readable text from the message before sending. destroying it. ONLY the EAS message will be sent (as "message").',
+    help=('Trim the human readable text from the message before sending. destroying it.'
+          'ONLY the EAS message will be sent (as "message").'
+    ),
 )
 
 args = parser.parse_args()
 requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
 
 if not any(getattr(args, arg) for arg in requiredArgs.values()):
-    argList = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
-    parser.error(f"At least one of the following arguments must be provided: {argList}")
+    ARG_LIST = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
+    parser.error(f"At least one of the following arguments must be provided: {ARG_LIST}")
 
 if args.debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
 class Webhook:
+    """
+    Generic class for sending messages to a webhook URL.
+    """
     def __init__(self, url=None, eas=None):
         self.headers = {"Content-Type": "application/json"}
         self.url = url
         self.eas = eas
 
-    def post(self, messageContent):
-        self.payload = {"message": messageContent}
+    def post(self, message_content):
+        """
+        Generic POST request to a webhook URL.
+
+        Parameters:
+        - message_content (str): The message to send to the webhook.
+        """
+        self.payload = {"message": message_content}
 
         if self.eas:
             self.payload["eas"] = self.eas
@@ -93,17 +121,26 @@ class Webhook:
             "Making POST to %s with payload: %s", self.url, json.dumps(self.payload)
         )
         response = requests.post(
-            self.url, headers=self.headers, json=json.dumps(self.payload)
+            self.url, headers=self.headers, json=json.dumps(self.payload), timeout=10
         )
         logging.info("Response from %s: %s", self.url, response.text)
 
 
 class GroupMe(Webhook):
-    def post(self, messageContent):
+    """
+    Operations for sending messages to a GroupMe group via a Bot.
+    """
+    def post(self, message_content):
+        """
+        Post message to a GroupMe group via a Bot.
+        """
+
         self.url = "https://api.groupme.com/v3/bots/post"
 
-        footer = "\n\nThis message was sent using OpenENDEC V2.1 [github/WBOR-91-1-FM/wbor-endec]\n----------"
-        body = f"{messageContent}{footer}"
+        footer = ("\n\nThis message was sent using OpenENDEC V2.1"
+                  "[github/WBOR-91-1-FM/wbor-endec]\n----------"
+        )
+        body = f"{message_content}{footer}"
 
         # Split body into 500 character segments (max length for GroupMe messages)
         segments = [body[i : i + 500] for i in range(0, len(body), 500)]
@@ -117,7 +154,7 @@ class GroupMe(Webhook):
                 logging.debug("Making POST to GroupMe with payload: %s", self.payload)
                 logging.info("Making POST to GroupMe")
                 response = requests.post(
-                    self.url, headers=self.headers, json=self.payload
+                    self.url, headers=self.headers, json=self.payload, timeout=10
                 )
                 if response.text:
                     logging.error("GroupMe's response: %s", response.text)
@@ -132,34 +169,34 @@ def post():
     Raises:
         requests.exceptions.RequestException: If the request to a webhook fails.
     """
-    global messageContent
+    global message_content
     global eas
 
     # Post to each webhook URL provided
     if args.webhookUrls:
         for url in args.webhookUrls:
-            Webhook(url, eas).post(messageContent)
+            Webhook(url, eas).post(message_content)
 
     # Post to GroupMe if bot ID is provided
     if args.groupmeBotId:
-        GroupMe().post(messageContent)
+        GroupMe().post(message_content)
 
-    messageContent = ""
+    message_content = ""
     eas = ""
 
 
-def newsFeed():
+def newsfeed():
     """
     Continuously decodes News Feed objects from the provided serial port.
 
     Raises:
         serial.SerialException: If the serial connection fails.
     """
-    serialText = ""
-    dataList = []
-    global messageContent
+    serial_text = ""
+    data_list = []
+    global message_content
     global eas
-    activeAlert = False
+    active_alert = False
     i = 0
 
     while True:
@@ -168,33 +205,31 @@ def newsFeed():
             logging.info("Connected to serial port %s", args.port)
             if ser.isOpen():
                 while True:
-                    serialText = ser.readline().decode("utf-8").strip()
-                    if "<ENDECSTART>" in serialText:
-                        activeAlert = True
-                    elif "<ENDECEND>" in serialText:
+                    serial_text = ser.readline().decode("utf-8").strip()
+                    if "<ENDECSTART>" in serial_text:
+                        active_alert = True
+                    elif "<ENDECEND>" in serial_text:
                         if args.trim:
-                            dataList.pop()
+                            data_list.pop()
 
                         if args.fork:
-                            eas = dataList.pop()
+                            eas = data_list.pop()
 
                         if args.quiet:
-                            dataList = [dataList[-1]]
+                            data_list = [data_list[-1]]
 
-                        messageContent = "".join(dataList)
-                        dataList = []
-                        activeAlert = False
+                        message_content = "".join(data_list)
+                        data_list = []
+                        active_alert = False
                         i = 0
                         post()
                     else:
-                        if activeAlert:
-                            dataList.append(serialText)
-                            logging.debug("Line #%d: %s", i, serialText)
+                        if active_alert:
+                            data_list.append(serial_text)
+                            logging.debug("Line #%d: %s", i, serial_text)
                             i += 1
-        except SerialException as e:
-            logging.error("Serial exception: %s", e)
-        except Exception as e:
-            logging.error("Unexpected error: %s", e)
+        except (serial.SerialException, requests.exceptions.RequestException) as e:
+            logging.error("Handled error: %s", e)
         finally:
             if ser.isOpen():
                 ser.close()
@@ -205,6 +240,10 @@ def newsFeed():
 
 if __name__ == "__main__":
     logging.info(
-        f"OpenENDEC V2.1\nOriginally Written By: Evan Vander Stoep [https://github.com/EvanVS]\nModified by: Mason Daugherty [https://github.com/mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\nLogger Started!\nLogs will be stored at {LOGFILE}"
+        "OpenENDEC V2.1\n"
+        "Originally Written By: Evan Vander Stoep [https://github.com/EvanVS]\n"
+        "Modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\n"
+        "Logger Started!\nLogs will be stored at %s",
+        LOGFILE,
     )
-    newsFeed()
+    newsfeed()
