@@ -3,14 +3,12 @@ Module to decode EAS messages from a Sage Digital ENDEC.
 
 Options allow for forwarding of decoded messages to a webhook URL or a GroupMe group.
 """
-import os
+
 import json
-import sys
 import argparse
 import logging
 import time
 import requests
-import serial
 from serial import Serial
 from serial.serialutil import SerialException
 
@@ -59,8 +57,9 @@ group.add_argument(
     dest="trim",
     action="store_true",
     default=False,
-    help=('Trim the EAS message from the body before sending, destroying it.'
-          '"message" will contain the human readable text ONLY.'
+    help=(
+        "Trim the EAS message from the body before sending, destroying it."
+        '"message" will contain the human readable text ONLY.'
     ),
 )
 group.add_argument(
@@ -80,8 +79,9 @@ group.add_argument(
     dest="quiet",
     action="store_true",
     default=False,
-    help=('Trim the human readable text from the message before sending. destroying it.'
-          'ONLY the EAS message will be sent (as "message").'
+    help=(
+        "Trim the human readable text from the message before sending. destroying it."
+        'ONLY the EAS message will be sent (as "message").'
     ),
 )
 
@@ -90,7 +90,9 @@ requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
 
 if not any(getattr(args, arg) for arg in requiredArgs.values()):
     ARG_LIST = ", ".join([f"--{arg}" for arg in requiredArgs.keys()])
-    parser.error(f"At least one of the following arguments must be provided: {ARG_LIST}")
+    parser.error(
+        f"At least one of the following arguments must be provided: {ARG_LIST}"
+    )
 
 if args.debug:
     logging.basicConfig(level=logging.DEBUG)
@@ -100,6 +102,7 @@ class Webhook:
     """
     Generic class for sending messages to a webhook URL.
     """
+
     def __init__(self, url=None, eas=None):
         self.headers = {"Content-Type": "application/json"}
         self.url = url
@@ -130,6 +133,7 @@ class GroupMe(Webhook):
     """
     Operations for sending messages to a GroupMe group via a Bot.
     """
+
     def post(self, message_content):
         """
         Post message to a GroupMe group via a Bot.
@@ -137,8 +141,9 @@ class GroupMe(Webhook):
 
         self.url = "https://api.groupme.com/v3/bots/post"
 
-        footer = ("\n\nThis message was sent using OpenENDEC V2.1"
-                  "[github/WBOR-91-1-FM/wbor-endec]\n----------"
+        footer = (
+            "\n\nThis message was sent using OpenENDEC V2.1"
+            "[github/WBOR-91-1-FM/wbor-endec]\n----------"
         )
         body = f"{message_content}{footer}"
 
@@ -201,7 +206,7 @@ def newsfeed():
 
     while True:
         try:
-            ser = serial.Serial(args.port, baudrate=9600, bytesize=8, stopbits=1)
+            ser = Serial(args.port, baudrate=9600, bytesize=8, stopbits=1)
             logging.info("Connected to serial port %s", args.port)
             if ser.isOpen():
                 while True:
@@ -228,7 +233,7 @@ def newsfeed():
                             data_list.append(serial_text)
                             logging.debug("Line #%d: %s", i, serial_text)
                             i += 1
-        except (serial.SerialException, requests.exceptions.RequestException) as e:
+        except (SerialException, requests.exceptions.RequestException) as e:
             logging.error("Handled error: %s", e)
         finally:
             if ser.isOpen():
