@@ -8,8 +8,8 @@ The executable reads:
 - a secrets file provided by systemd LoadCredential (or a fallback path)
 
 Authors:
-    - Evan Vander Stoep <@evanvs>
-    - Mason Daugherty <@mdrxy>
+- Evan Vander Stoep <@evanvs>
+- Mason Daugherty <@mdrxy>
 
 Version: 3.0.0
 Last Modified: 2025-05-09
@@ -189,7 +189,7 @@ def _load_location_map() -> tuple[dict[str, str], dict[str, str]]:
         for line in f:
             parts = line.strip().split(",")
 
-            # Expected: ABBR, state_fips, county_fips, county_name, class
+            # Expect `ABBR,state_fips,county_fips,county_name,class`
             if len(parts) < 4:
                 # Malformed line, skip
                 continue
@@ -401,6 +401,7 @@ CATEGORY_COLORS = {
     "future": 0xE74C3C,  # red
 }
 
+# EAS header regex, spec defined in parse_eas() docstring
 HEADER_RE = re.compile(
     r"^ZCZC-"  # start
     r"(?P<org>[A-Z]{3})-"  # ORG
@@ -801,9 +802,9 @@ def main() -> None:  # pylint: disable=missing-function-docstring
 
     _lazy_setup_logging(cfg.debug, cfg.logfile)
 
-    LOGGER.info("wbor-endec starting - serial on `%s`", cfg.port)
+    LOGGER.info("wbor-endec starting on `%s`", cfg.port)
     LOGGER.info(
-        "Originally Written By: Evan Vander Stoep [https://github.com/EvanVS]\n"
+        "Originally Written By: Evan Vander Stoep [@EvanVS]\n"
         "Rewritten and modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM "
         "[https://wbor.org]\n\nLogger Started!\n"
     )
