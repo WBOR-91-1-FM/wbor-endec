@@ -318,6 +318,89 @@ EAS_EVENT_NAMES = {
     "WFW": "Wild Fire Warning",
 }
 
+# Define sets of event codes by category
+ADMIN_CODES = {"ADR", "DMO", "NPT", "NAT", "NIC", "NMN", "NST", "RWT", "RMT", "EAN"}
+WEATHER_CODES = {
+    "BZW",
+    "CFA",
+    "CFW",
+    "DSW",
+    "EWW",
+    "FFA",
+    "FFW",
+    "FFS",
+    "FLA",
+    "FLW",
+    "FLS",
+    "HWA",
+    "HWW",
+    "HUA",
+    "HUW",
+    "HLS",
+    "SVA",
+    "SVR",
+    "SVS",
+    "SQW",
+    "SMW",
+    "SPS",
+    "SSA",
+    "SSW",
+    "TOA",
+    "TOR",
+    "TRA",
+    "TRW",
+    "TSA",
+    "TSW",
+    "WSA",
+    "WSW",
+}
+NONWEATHER_CODES = {
+    "AVA",
+    "AVW",
+    "BLU",
+    "CAE",
+    "CDW",
+    "CEM",
+    "EQW",
+    "EVI",
+    "FRW",
+    "HMW",
+    "LEW",
+    "LAE",
+    "TOE",
+    "NUW",
+    "RHW",
+    "SPW",
+    "VOW",
+    "MEP",
+}
+INTERNAL_CODES = {"TXB", "TXF", "TXO", "TXP"}
+FUTURE_CODES = {
+    "BHW",
+    "BWW",
+    "CHW",
+    "CWW",
+    "DBA",
+    "DBW",
+    "DEW",
+    "EVA",
+    "FCW",
+    "IBW",
+    "IFW",
+    "LSW",
+    "POS",
+    "WFA",
+    "WFW",
+}
+
+CATEGORY_COLORS = {
+    "administrative": 0x3498DB,  # blue
+    "weather": 0xF1C40F,  # yellow
+    "emergency": 0xE74C3C,  # red
+    "internal": 0x95A5A6,  # grey
+    "future": 0xE74C3C,  # red
+}
+
 HEADER_RE = re.compile(
     r"^ZCZC-"  # start
     r"(?P<org>[A-Z]{3})-"  # ORG
@@ -483,14 +566,26 @@ class Discord:  # pylint: disable=too-few-public-methods
         - eas_fields (Dict[str, str]): A dictionary containing EAS
             fields to include in the message as embedded fields.
         """
-        locations = eas_fields.get("locs", [])
-        duration = eas_fields.get("duration_minutes")
-        start = eas_fields.get("start_utc")
-        sender = eas_fields.get("sender")
+        # Determine color based on event code
+        code = eas_fields.get("event", "")
+        if code in ADMIN_CODES:
+            cat = "administrative"
+        elif code in WEATHER_CODES:
+            cat = "weather"
+        elif code in NONWEATHER_CODES:
+            cat = "emergency"
+        elif code in INTERNAL_CODES:
+            cat = "internal"
+        elif code in FUTURE_CODES:
+            cat = "future"
+        else:
+            cat = "emergency"
+        color = CATEGORY_COLORS.get(cat, 0x95A5A6)
 
         embed = {
-            "title": "EAS Message",
+            "title": f"{eas_fields['event_name']}",
             "description": content,
+            "color": color,
             "fields": [
                 # Originator + event code
                 {
@@ -498,29 +593,29 @@ class Discord:  # pylint: disable=too-few-public-methods
                     "value": f"{eas_fields['event_name']} ({eas_fields['event']})",
                     "inline": True,
                 },
-                # All location codes
-                {
-                    "name": "Locations",
-                    "value": locations and ", ".join(locations) or "Not found",
-                    "inline": True,
-                },
                 # Duration in minutes
                 {
                     "name": "Duration (min)",
-                    "value": duration is not None and str(duration) or "Not found",
+                    "value": str(eas_fields.get("duration_minutes", "Not found")),
                     "inline": True,
                 },
                 # Start timestamp in UTC
                 {
                     "name": "Start (UTC)",
-                    "value": start or "Not found",
+                    "value": eas_fields.get("start_utc", "Not found"),
                     "inline": True,
                 },
                 # Sending station's ID
                 {
                     "name": "Sender",
-                    "value": sender or "Not found",
+                    "value": eas_fields.get("sender", "Not found"),
                     "inline": True,
+                },
+                # All location codes
+                {
+                    "name": "Locations",
+                    "value": ", ".join(eas_fields.get("locs", [])) or "Not found",
+                    "inline": False,
                 },
             ],
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
