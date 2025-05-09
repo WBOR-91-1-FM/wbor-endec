@@ -54,7 +54,7 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
     """
 
     handlers: List[logging.Handler] = []
-    fmt = "% (asctime)s - %(levelname)s - %(message)s"
+    fmt = "%(asctime)s - %(levelname)s - %(message)s"
 
     if logfile:
         try:
