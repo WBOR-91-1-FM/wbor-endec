@@ -1,5 +1,5 @@
 """
-OpenENDEC V3
+wbor-endec
 Decode NewsFeed EAS messages from a Sage Digital ENDEC and forward them
 to Discord, GroupMe or generic webhook URLs.
 
@@ -45,7 +45,7 @@ from serial.serialutil import SerialException
 # Utilities
 # ---------------------------------------------------------------------------
 
-LOGGER = logging.getLogger("openendec")
+LOGGER = logging.getLogger("wbor-endec")
 
 
 def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
@@ -419,34 +419,43 @@ class Discord:  # pylint: disable=too-few-public-methods
         - eas_fields (Dict[str, str]): A dictionary containing EAS
             fields to include in the message as embedded fields.
         """
-        duration = eas_fields.get("duration")
+        locations = eas_fields.get("locs", [])
+        duration = eas_fields.get("duration_minutes")
+        start = eas_fields.get("start_utc")
+        sender = eas_fields.get("sender")
+
         embed = {
             "title": "EAS Message",
             "description": content,
             "fields": [
+                # Originator + event code
                 {
                     "name": "Event",
-                    "value": f"{eas_fields.get('event_name')} ({eas_fields.get('event')})",
+                    "value": f"{eas_fields['event_name']} ({eas_fields['event']})",
                     "inline": True,
                 },
+                # All location codes
                 {
-                    "name": "Location",
-                    "value": eas_fields.get("location", "not found"),
+                    "name": "Locations",
+                    "value": locations and ", ".join(locations) or "not found",
                     "inline": True,
                 },
+                # Duration in minutes
                 {
-                    "name": "Duration",
-                    "value": f"{duration} min" if duration else "not found",
+                    "name": "Duration (min)",
+                    "value": duration is not None and str(duration) or "not found",
                     "inline": True,
                 },
+                # Start timestamp in UTC
                 {
-                    "name": "Start",
-                    "value": eas_fields.get("start", "not found"),
+                    "name": "Start (UTC)",
+                    "value": start or "not found",
                     "inline": True,
                 },
+                # Sending station's ID
                 {
-                    "name": "ID",
-                    "value": eas_fields.get("id", "not found"),
+                    "name": "Sender",
+                    "value": sender or "not found",
                     "inline": False,
                 },
             ],
@@ -481,7 +490,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         - message (str): The message content to send.
         """
         footer = (
-            "\n\nThis message was sent using OpenENDEC V2\n"
+            "\n\nThis message was sent using wbor-endec V2\n"
             "[WBOR-91-1-FM/wbor-endec]\n----------"
         )
         body = f"{message}{footer}"
@@ -624,7 +633,7 @@ def main() -> None:  # pylint: disable=missing-function-docstring
     public_cfg = _load_json(args.config)
 
     # Get secrets
-    secret_path_str = os.getenv("SECRETS_PATH", "/etc/openendec/secrets.json")
+    secret_path_str = os.getenv("SECRETS_PATH", "/etc/wbor-endec/secrets.json")
     secret_path = Path(secret_path_str)
     secrets = _load_json(secret_path)
 
@@ -633,11 +642,11 @@ def main() -> None:  # pylint: disable=missing-function-docstring
 
     _lazy_setup_logging(cfg.debug, cfg.logfile)
 
-    LOGGER.info("OpenENDEC V3 starting - serial on `%s`", cfg.port)
+    LOGGER.info("wbor-endec starting - serial on `%s`", cfg.port)
     LOGGER.info(
         "Originally Written By: Evan Vander Stoep [https://github.com/EvanVS]\n"
-        "Modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\n"
-        "Logger Started!\n"
+        "Rewritten and modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM "
+        "[https://wbor.org]\n\nLogger Started!\n"
     )
 
     # Launch main loop
