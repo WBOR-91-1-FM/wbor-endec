@@ -103,5 +103,6 @@ Look for `active (running)` and the `openendec.log` file to confirm it is up and
 After updating (pulling from this repo), be sure to run:
 
 ```sh
-sudo systemctl start wbor-endec.service
+sudo systemctl daemon-reload
+sudo systemctl restart wbor-endec.service
 ```
