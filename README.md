@@ -78,7 +78,7 @@ You will need to change:
 
 - `{DEVICE}` = the `/dev/` device you found in step 3, e.g. `/dev/ttyUSB0`. IMPORTANT NOTE: Systemd derives the device unit name from the path by converting slashes to dashes, e.g. /dev/ttyENDEC → dev-ttyENDEC.device. So, if your device is `/dev/ttyUSB0`, the unit name will be `dev-ttyUSB0.device`. You can check this by running `systemctl list-units --type=device` and looking for your device.
 - Under `ExecStart`
-  - `{PYTHON_EXEC}` = directory for your Python executable, e.g. `/usr/bin/python3` or, if using a virtual environment, `/home/username/wbor-endec/venv/bin/python`
+  - `{PYTHON_EXEC}` = directory for your Python executable, e.g. `/usr/bin/python3` or, if using a virtual environment, `/home/username/wbor-endec/venv/bin/python` (in most cases, you'll need to make one and then install the dependencies with `pip install -r requirements.txt`)
   - `{SCRIPT_PATH}` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
   - `{OPTIONS}` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
 - `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
@@ -97,7 +97,7 @@ sudo systemctl status wbor-endec.service
 
 Look for `active (running)` and the `openendec.log` file to confirm it is up and running.
 
-After updating, run:
+After updating (pulling from this repo), be sure to run:
 
 ```sh
 sudo systemctl start wbor-endec.service

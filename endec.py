@@ -209,7 +209,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         - requests.exceptions.RequestException: If any request fails.
         """
         footer = (
-            "\n\nThis message was sent using OpenENDEC V2.1"
+            "\n\nThis message was sent using OpenENDEC V2\n"
             "[github/WBOR-91-1-FM/wbor-endec]\n----------"
         )
         body = f"{message_content}{footer}"
@@ -340,7 +340,7 @@ def process_newsfeed(process_args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     logging.info(
-        "OpenENDEC V2.1\n"
+        "OpenENDEC V2\n"
         "Originally Written By: Evan Vander Stoep [https://github.com/EvanVS]\n"
         "Modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\n"
         "Logger Started!\nLogs will be stored at %s",

@@ -5,8 +5,8 @@ After={DEVICE}
 After=network.target
 
 [Service]
-ExecStart={PYTHON_EXEC} {SCRIPT_PATH} {OPTIONS}
-WorkingDirectory=
+ExecStart={PYTHON_EXEC} {SCRIPT_PATH} {COMMAND LINE OPTIONS}
+WorkingDirectory={SAME DIR CONTAINING SCRIPT_PATH}
 User=
 Restart=always
 RestartSec=10
