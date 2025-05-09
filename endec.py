@@ -266,7 +266,7 @@ HEADER_RE = re.compile(
     r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
     r"\+(?P<dur>\d{4})-"  # +TTTT
     r"(?P<ts>\d{7})-"  # JJJHHMM
-    r"(?P<sender>[A-Z0-9/]{8})-"  # LLLLLLLL
+    r"(?P<sender>[A-Z0-9/ ]{8})-"  # LLLLLLLL allowing space padding
     r"$"
 )
 
@@ -326,6 +326,9 @@ def parse_eas(header: str) -> Dict[str, str]:
     hours, mins = divmod(int(g["dur"]), 100)
     duration_minutes = hours * 60 + mins
 
+    # Clean up space-padded sender
+    sender = g["sender"].rstrip()
+
     # JJJHHMM to ISO UTC (current year)
     jjj, hh, mm = int(g["ts"][:3]), int(g["ts"][3:5]), int(g["ts"][5:])
     y_start = datetime.utcnow().replace(
@@ -343,7 +346,7 @@ def parse_eas(header: str) -> Dict[str, str]:
         "duration_raw": g["dur"],
         "start_utc": start_utc,
         "timestamp_raw": g["ts"],
-        "sender": g["sender"],
+        "sender": sender,
         "event_name": EAS_EVENT_NAMES.get(g["event"], "Unknown"),
         "raw_header": header,
     }
@@ -550,10 +553,14 @@ def process_serial(cfg: Settings) -> None:
             port.
         """
         eas_fields: Dict[str, str] = {}
-
+        header = None
         # Strip final header line
         if lines and lines[-1].startswith("ZCZC"):
-            eas_fields = parse_eas(lines.pop())
+            header = lines.pop()
+            try:
+                eas_fields = parse_eas(header)
+            except ValueError:
+                LOGGER.warning("Skipping malformed EAS header: %r", header)
 
         message = " ".join(lines)
         dispatch(message, eas_fields, cfg)
