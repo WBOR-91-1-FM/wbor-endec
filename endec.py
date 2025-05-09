@@ -169,6 +169,65 @@ class Settings:  # pylint: disable=too-few-public-methods
 
 
 # ---------------------------------------------------------------------------
+# Location lookup
+# ---------------------------------------------------------------------------
+
+
+def _load_location_map() -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Load information from the national_county.txt file and return two
+    dictionaries:
+    - loc_map: Maps PSSCCC location codes to human-readable names.
+    - state_map: Maps state FIPS codes to their corresponding
+        abbreviations.
+    """
+    loc_map: dict[str, str] = {}
+    state_map: dict[str, str] = {}
+
+    fn = Path(__file__).parent / "national_county.txt"
+    with fn.open(encoding="utf-8") as f:
+        for line in f:
+            parts = line.strip().split(",")
+
+            # Expected: ABBR, state_fips, county_fips, county_name, class
+            if len(parts) < 4:
+                # Malformed line, skip
+                continue
+
+            abbr, st, co, county_name = parts[:4]
+
+            # Zero-fill state and county codes
+            st, co = st.zfill(2), co.zfill(3)
+
+            key = st + co
+            loc_map[key] = f"{county_name}, {abbr}"
+
+            # If its the first time we see this state_fips, record abbr
+            state_map.setdefault(st, abbr)
+    return loc_map, state_map
+
+
+_LOC_MAP, _STATE_MAP = _load_location_map()
+
+
+def _lookup_location(code: str) -> str:
+    """
+    Return a human-readable location name for the given PSSCCC code.
+
+    Parameters:
+    - code (str): The 6-digit PSSCCC string, e.g. "023005".
+
+    Returns:
+    - str: The human-readable location name, or "Unknown" if not found.
+    """
+    ssccc = code[1:]  # Drop leading placeholder
+    st, co = ssccc[:2], ssccc[2:]
+    if co == "000":
+        return _STATE_MAP.get(st, "Unknown")
+    return _LOC_MAP.get(ssccc, "Unknown")
+
+
+# ---------------------------------------------------------------------------
 # EAS helpers
 # ---------------------------------------------------------------------------
 
@@ -338,10 +397,15 @@ def parse_eas(header: str) -> Dict[str, str]:
         "%Y-%m-%dT%H:%MZ"
     )
 
+    # Get human-readable location names, stored alongside the raw codes
+    raw_locs = g["locs"].split("-")
+    locs = [_lookup_location(loc) for loc in raw_locs]
+
     return {
         "org": g["org"],
         "event": g["event"],
-        "locs": g["locs"].split("-"),
+        "locs": locs,
+        "raw_locs": raw_locs,
         "duration_minutes": duration_minutes,
         "duration_raw": g["dur"],
         "start_utc": start_utc,
@@ -437,26 +501,26 @@ class Discord:  # pylint: disable=too-few-public-methods
                 # All location codes
                 {
                     "name": "Locations",
-                    "value": locations and ", ".join(locations) or "not found",
+                    "value": locations and ", ".join(locations) or "Not found",
                     "inline": True,
                 },
                 # Duration in minutes
                 {
                     "name": "Duration (min)",
-                    "value": duration is not None and str(duration) or "not found",
+                    "value": duration is not None and str(duration) or "Not found",
                     "inline": True,
                 },
                 # Start timestamp in UTC
                 {
                     "name": "Start (UTC)",
-                    "value": start or "not found",
+                    "value": start or "Not found",
                     "inline": True,
                 },
                 # Sending station's ID
                 {
                     "name": "Sender",
-                    "value": sender or "not found",
-                    "inline": False,
+                    "value": sender or "Not found",
+                    "inline": True,
                 },
             ],
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
