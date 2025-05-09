@@ -6,9 +6,8 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=SECRETS_PATH={PATH_TO_SECRETS_JSON}
 ExecStart={PYTHON3_EXEC_PATH} {ENDEC_SCRIPT_PATH} --config {PATH_TO_CONFIG_JSON}
-# systemd v251+ mounts secrets.json into memfd
-LoadCredential=secrets.json:/etc/openendec/secrets.json
 WorkingDirectory={SAME DIR CONTAINING SCRIPT_PATH}
 User={MACHINE_USER}
 Restart=always

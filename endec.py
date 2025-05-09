@@ -617,8 +617,8 @@ def main() -> None:  # pylint: disable=missing-function-docstring
     public_cfg = _load_json(args.config)
 
     # Get secrets
-    cred_dir = Path(os.getenv("CREDENTIALS_DIRECTORY", "/etc/openendec"))
-    secret_path = cred_dir / "secrets.json"
+    secret_path_str = os.getenv("SECRETS_PATH", "/etc/openendec/secrets.json")
+    secret_path = Path(secret_path_str)
     secrets = _load_json(secret_path)
 
     # Merge configs

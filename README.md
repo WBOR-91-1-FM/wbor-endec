@@ -1,4 +1,4 @@
-# OpenEndec V2.1
+# wbor-endec (FKA OpenEndec)
 
 > [!WARNING]
 > **DO NOT RELY ON THIS PROGRAM WHEN LOSS, DAMAGE, INJURY OR DEATH MAY OCCUR!**
@@ -31,16 +31,22 @@ A secure, Open Source EAS ENDEC Logger to transmit News Feed messages recieved b
 ```json
 {
   "port": "/dev/ttyUSB0",
-  "logfile": "/var/log/openendec/openendec.log",
+  "logfile": "/var/log/wbor-endec/wbor-endec.log",
   "debug": false
 }
 ```
 
 - `port`: The device to read from. This is the `/dev/` port for your ENDEC hardware. For example, if your ENDEC is connected to `/dev/ttyUSB0`, you would use `/dev/ttyUSB0`.
-- `logfile`: The (optional) path to the log file. This is where OpenEndec will write its logs if specified. Make sure the user running OpenEndec has write permissions to this file. If not specified, logs go to `stderr`/`journal`.
+- `logfile`: The (optional) path to the log file. This is where wbor-endec will write its logs if specified. Make sure the user running wbor-endec has write permissions to this file. If not specified, logs go to `stderr`/`journal`.
 - `debug`: Set to `true` to enable debug level logging.
 
-Save as `/etc/openendec/config.json` (0644).
+Save as `/etc/wbor-endec/config.json` (0644):
+
+```sh
+sudo mkdir -p /etc/wbor-endec
+sudo cp config.json /etc/wbor-endec/config.json
+sudo chmod 0644 /etc/wbor-endec/config.json
+```
 
 ### Private credentials (`secrets.json`)
 
@@ -56,7 +62,14 @@ Save as `/etc/openendec/config.json` (0644).
 - `groupme_bot_ids`: List of GroupMe bot IDs to forward EAS messages to. These can be found in the GroupMe developer portal (public, free).
 - `discord_urls`: List of Discord webhook URLs to forward EAS messages to. You can create a webhook in your Discord server channel settings.
 
-Save in a directory managed by systemd's `LoadCredential` (e.g. `/etc/openendec/`) as `secrets.json` with permissions `0600` and owner `root:root`.
+Save in a directory managed by systemd's `LoadCredential` (e.g. `/etc/wbor-endec/`) as `secrets.json` with permissions `0600` and owner `root:root`:
+
+```sh
+sudo mkdir -p /etc/wbor-endec
+sudo cp secrets.json /etc/wbor-endec/secrets.json
+sudo chmod 0600 /etc/wbor-endec/secrets.json
+sudo chown root:root /etc/wbor-endec/secrets.json
+```
 
 --------------OLD
 `--com / -c`: The device to read from. This is the `/dev/` port for your ENDEC hardware. For example, if your ENDEC is connected to `/dev/ttyUSB0`, you would use `-c /dev/ttyUSB0`.
@@ -91,11 +104,11 @@ Save in a directory managed by systemd's `LoadCredential` (e.g. `/etc/openendec/
 6. Start monitoring the ENDEC by running the script:
 
     ```sh
-    python3 endec.py --config /etc/openendec/config.json
+    python3 endec.py --config /etc/wbor-endec/config.json
     ```
 
     - Reads public settings from `--config` path
-    - Loads secrets from `$CREDENTIALS_DIRECTORY/secrets.json` or `/etc/openendec/secrets.json`
+    - Loads secrets from `$CREDENTIALS_DIRECTORY/secrets.json` or `/etc/wbor-endec/secrets.json`
     - Validates port and URLs, then begins reading `<ENDECSTART>…<ENDECEND>` payloads and forwards messages
 
 ### Running as a Systemd Service
@@ -114,7 +127,7 @@ You will need to change:
   - `{SCRIPT_PATH}` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
   - `{OPTIONS}` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
 - `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
-- `User` = username for the user running OpenEndec (e.g. `pi` for Raspberry Pi)
+- `User` = username for the user running wbor-endec (e.g. `pi` for Raspberry Pi)
 
 **Device Unit Naming:**
 
@@ -127,7 +140,7 @@ sudo systemctl start wbor-endec.service
 sudo systemctl status wbor-endec.service
 ```
 
-Look for `active (running)` and the `openendec.log` file to confirm it is up and running.
+Look for `active (running)` and the `wbor-endec.log` file to confirm it is up and running.
 
 After updating (pulling from this repo), be sure to run:
 
