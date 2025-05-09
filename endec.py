@@ -199,10 +199,90 @@ def parse_eas(header: str) -> dict:
 
 
 EAS_EVENT_NAMES = {
+    # Administrative & Test Events
+    "ADR": "Administrative Message",
+    "DMO": "Practice/Demo Warning",
+    "NPT": "Nationwide Test of the Emergency Alert System",
+    "NAT": "National Audible Test",
+    "NIC": "National Information Center",
+    "NMN": "Network Notification Message",
+    "NST": "National Silent Test",
     "RWT": "Required Weekly Test",
     "RMT": "Required Monthly Test",
     "EAN": "Emergency Action Notification",
-    # Add more as needed
+    # Weather-Related Events
+    "BZW": "Blizzard Warning",
+    "CFA": "Coastal Flood Watch",
+    "CFW": "Coastal Flood Warning",
+    "DSW": "Dust Storm Warning",
+    "EWW": "Extreme Wind Warning",
+    "FFA": "Flash Flood Watch",
+    "FFW": "Flash Flood Warning",
+    "FFS": "Flash Flood Statement",
+    "FLA": "Flood Watch",
+    "FLW": "Flood Warning",
+    "FLS": "Flood Statement",
+    "HWA": "High Wind Watch",
+    "HWW": "High Wind Warning",
+    "HUA": "Hurricane Watch",
+    "HUW": "Hurricane Warning",
+    "HLS": "Hurricane Local Statement",
+    "SVA": "Severe Thunderstorm Watch",
+    "SVR": "Severe Thunderstorm Warning",
+    "SVS": "Severe Weather Statement",
+    "SQW": "Snow Squall Warning",
+    "SMW": "Special Marine Warning",
+    "SPS": "Special Weather Statement",
+    "SSA": "Storm Surge Watch",
+    "SSW": "Storm Surge Warning",
+    "TOA": "Tornado Watch",
+    "TOR": "Tornado Warning",
+    "TRA": "Tropical Storm Watch",
+    "TRW": "Tropical Storm Warning",
+    "TSA": "Tsunami Watch",
+    "TSW": "Tsunami Warning",
+    "WSA": "Winter Storm Watch",
+    "WSW": "Winter Storm Warning",
+    # Non-Weather Emergencies
+    "AVA": "Avalanche Watch",
+    "AVW": "Avalanche Warning",
+    "BLU": "Blue Alert",
+    "CAE": "Child Abduction Emergency",
+    "CDW": "Civil Danger Warning",
+    "CEM": "Civil Emergency Message",
+    "EQW": "Earthquake Warning",
+    "EVI": "Evacuation Immediate",
+    "FRW": "Fire Warning",
+    "HMW": "Hazardous Materials Warning",
+    "LEW": "Law Enforcement Warning",
+    "LAE": "Local Area Emergency",
+    "TOE": "911 Telephone Outage Emergency",
+    "NUW": "Nuclear Power Plant Warning",
+    "RHW": "Radiological Hazard Warning",
+    "SPW": "Shelter in Place Warning",
+    "VOW": "Volcano Warning",
+    "MEP": "Missing & Endangered Persons",
+    # Internal-Only Codes
+    "TXB": "Transmitter Backup On",
+    "TXF": "Transmitter Carrier Off",
+    "TXO": "Transmitter Carrier On",
+    "TXP": "Transmitter Primary On",
+    # Future Implementation Codes
+    "BHW": "Biological Hazard Warning",
+    "BWW": "Boil Water Warning",
+    "CHW": "Chemical Hazard Warning",
+    "CWW": "Contaminated Water Warning",
+    "DBA": "Dam Watch",
+    "DBW": "Dam Break Warning",
+    "DEW": "Contagious Disease Warning",
+    "EVA": "Evacuation Watch",
+    "FCW": "Food Contamination Warning",
+    "IBW": "Iceberg Warning",
+    "IFW": "Industrial Fire Warning",
+    "LSW": "Landslide Warning",
+    "POS": "Power Outage Advisory",
+    "WFA": "Wild Fire Watch",
+    "WFW": "Wild Fire Warning",
 }
 
 
@@ -248,7 +328,7 @@ class Webhook:  # pylint: disable=too-few-public-methods
         response = requests.post(
             self.url, headers=self.headers, json=payload, timeout=10
         )
-        logging.info("Response from `%s`: %s", self.url, response.text)
+        logging.debug("Response from `%s`: %s", self.url, response.text)
         return response
 
 
@@ -270,7 +350,7 @@ class Discord:  # pylint: disable=too-few-public-methods
         - Original ID
         """
         embed = {
-            "title": "📢 EAS Message",
+            "title": "EAS Message",
             "description": content,
             "fields": [
                 {
@@ -300,7 +380,8 @@ class Discord:  # pylint: disable=too-few-public-methods
         payload = {"embeds": [embed]}
         for url in self.urls:
             logging.info("Posting EAS to Discord webhook %s", url)
-            requests.post(url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=10)
+            logging.debug("Response from `%s`: %s", url, response.text)
 
 
 class GroupMe:  # pylint: disable=too-few-public-methods
@@ -355,7 +436,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
                 )
                 responses.append(response)
                 if response.text:
-                    logging.error("GroupMe's response: %s", response.text)
+                    logging.debug("GroupMe's response: %s", response.text)
                 else:
                     logging.info("GroupMe POST successful")
 
@@ -424,7 +505,9 @@ def process_newsfeed(process_args: argparse.Namespace) -> None:
         if process_args.fork and lines:
             # Remove the final line (EAS message) and pass in to post
             eas_header = lines.pop()
+            logging.debug("About to parse EAS header: %r", eas_header)
             eas_fields = parse_eas(eas_header)
+            logging.debug("Parsed EAS fields: %s", eas_fields)
         if process_args.quiet and lines:
             # Remove human readable text, only keep EAS message
             lines = [lines[-1]]
@@ -441,14 +524,20 @@ def process_newsfeed(process_args: argparse.Namespace) -> None:
         ser = None
         try:
             ser = Serial(process_args.port, baudrate=9600, bytesize=8, stopbits=1)
-            logging.debug("Connected to serial port %s", process_args.port)
+            logging.debug("Serial port opened on `%s`", process_args.port)
 
             while ser.isOpen():
-                # Wait for start marker
+                logging.debug("Entering read loop on %s", process_args.port)
+
                 raw = ser.readline()
+                logging.debug("Raw input: %r", raw)
+
                 line = raw.decode("utf-8", errors="ignore")
                 if "<ENDECSTART>" not in line:
                     continue
+
+                if "<ENDECSTART>" in line:
+                    logging.debug("Found <ENDECSTART> in line: %r", line)
 
                 # Collect lines until reaching the end marker
                 buffer = []
@@ -460,10 +549,15 @@ def process_newsfeed(process_args: argparse.Namespace) -> None:
 
                 # Process the collected lines
                 if buffer:
+                    logging.debug(
+                        "Collected %d lines for one EAS payload: %s",
+                        len(buffer),
+                        buffer,
+                    )
                     transform_and_post(buffer)
 
         except (SerialException, requests.exceptions.RequestException) as exc:
-            logging.error("Handled error: %s", exc)
+            logging.debug("Exception caught, will retry: %s", exc, exc_info=True)
         finally:
             if ser and ser.isOpen():
                 ser.close()
