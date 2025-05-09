@@ -111,6 +111,25 @@ if args.debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
+def parse_eas(eas_str):
+    """
+    Parse the EAS string to extract the event and location.
+    # ex: ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
+    """
+    parts = eas_str.split("-")
+    event = parts[2]  # EEE
+    location = parts[3]  # PSSCCC
+    return event, location
+
+
+EAS_EVENT_NAMES = {
+    "RWT": "Required Weekly Test",
+    "RMT": "Required Monthly Test",
+    "EAN": "Emergency Action Notification",
+    # Add more as needed
+}
+
+
 class Webhook:
     """
     Generic class for sending messages to a webhook URL.
@@ -238,7 +257,7 @@ def newsfeed():
                         if args.quiet:
                             data_list = [data_list[-1]]
 
-                        message_content = "".join(data_list)
+                        message_content = " ".join(data_list)
                         data_list = []
                         active_alert = False
                         i = 0
