@@ -129,8 +129,6 @@ You will need to change:
 - `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
 - `User` = username for the user running wbor-endec (e.g. `pi` for Raspberry Pi)
 
-**Device Unit Naming:**
-
 After saving, run:
 
 ```sh
@@ -147,6 +145,20 @@ After updating (pulling from this repo), be sure to run:
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl restart wbor-endec.service
+```
+
+## Troubleshooting & Logs
+
+If the service fails to start or continuously restarts, view live output with:
+
+```sh
+sudo journalctl -u wbor-endec.service -f
+```
+
+To inspect the last 100 entries:
+
+```sh
+sudo journalctl -u wbor-endec.service -n 100
 ```
 
 Maintained by WBOR 91.1 FM and [Mason Daugherty](https://github.com/mdrxy), originally inspired by [Evan Vander Stoep](https://github.com/evanvs).
