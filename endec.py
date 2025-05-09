@@ -31,12 +31,6 @@ from serial.serialutil import SerialException
 
 LOGFILE = "openendec.log"
 
-logging.basicConfig(
-    filename=LOGFILE,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s : %(message)s",
-)
-
 
 def valid_port(path: str) -> str:
     """
@@ -158,6 +152,12 @@ group.add_argument(
 args = parser.parse_args()
 if not (args.webhookUrls or args.groupmeBotId or args.discordUrls):
     parser.error("You must provide at least one of: --webhook, --groupme, or --discord")
+
+logging.basicConfig(
+    filename=LOGFILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s : %(message)s",
+)
 
 if args.debug:
     logging.basicConfig(level=logging.DEBUG)
@@ -349,6 +349,9 @@ class Discord:  # pylint: disable=too-few-public-methods
         - Start timestamp
         - Original ID
         """
+        duration = eas_fields.get("duration")
+        duration_str = f"{duration} min" if duration else "not found"
+
         embed = {
             "title": "EAS Message",
             "description": content,
@@ -360,20 +363,24 @@ class Discord:  # pylint: disable=too-few-public-methods
                 },
                 {
                     "name": "Location",
-                    "value": eas_fields.get("location", "n/a"),
+                    "value": eas_fields.get("location", "Not found"),
                     "inline": True,
                 },
                 {
                     "name": "Duration",
-                    "value": f"{eas_fields.get('duration')} min",
+                    "value": duration_str,
                     "inline": True,
                 },
                 {
                     "name": "Start",
-                    "value": eas_fields.get("start", "n/a"),
+                    "value": eas_fields.get("start", "Not found"),
                     "inline": True,
                 },
-                {"name": "ID", "value": eas_fields.get("id", "n/a"), "inline": False},
+                {
+                    "name": "ID",
+                    "value": eas_fields.get("id", "Not found"),
+                    "inline": False,
+                },
             ],
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
