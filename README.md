@@ -14,17 +14,20 @@ EAS protocol specification: [47 CFR 11.31](https://www.ecfr.gov/current/title-47
 
 ## Features
 
-> - [x] Supports multiple concurrent transmission destinations
-> - [ ] Argument validation
+- Supports multiple concurrent transmission destinations
+- Argument validation
 
 **Destinations:**
 
-> - [x] Generic webhook
-> - [x] GroupMe
-> - [ ] Discord
-> - [ ] Email (SMTP)
-> - [ ] Twilio
-> - [ ] ???
+- Generic webhook
+- GroupMe
+- [ ] Discord
+
+In the future, we would be open to PRs for other destinations, such as:
+
+- [ ] Slack
+- [ ] Email (SMTP)
+- [ ] Twilio
 
 ## Options
 

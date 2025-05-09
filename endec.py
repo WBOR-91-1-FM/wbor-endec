@@ -20,7 +20,10 @@ Changelog:
 import argparse
 import json
 import logging
+import os
+import stat
 import time
+from urllib.parse import urlparse
 
 import requests
 from serial import Serial
@@ -34,12 +37,54 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s : %(message)s",
 )
 
+
+def valid_port(path: str) -> str:
+    """
+    Validate the provided serial port path.
+
+    Parameters:
+    - path (str): The path to the serial port.
+
+    Returns:
+    - str: The validated serial port path.
+
+    Raises:
+    - argparse.ArgumentTypeError: If the path does not exist or is not a
+        character device.
+    """
+    if not os.path.exists(path):
+        raise argparse.ArgumentTypeError(f"Serial port '{path}' not found")
+    if not stat.S_ISCHR(os.stat(path).st_mode):
+        raise argparse.ArgumentTypeError(f"{path} exists but isn't a character device")
+    return path
+
+
+def valid_url(u: str) -> str:
+    """
+    Validate the provided URL.
+
+    Parameters:
+    - u (str): The URL to validate.
+
+    Returns:
+    - str: The validated URL.
+
+    Raises:
+    - argparse.ArgumentTypeError: If the URL is invalid.
+    """
+    p = urlparse(u)
+    if p.scheme not in ("http", "https") or not p.netloc:
+        raise argparse.ArgumentTypeError(f"Invalid webhook URL: {u!r}")
+    return u
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "-c",
     "--com",
     dest="port",
     default="/dev/ttyUSB0",
+    type=valid_port,
     help="Select the port the device is on. Default is /dev/ttyUSB0",
 )
 parser.add_argument(
@@ -47,14 +92,24 @@ parser.add_argument(
     "--webhook",
     dest="webhookUrls",
     nargs="+",
+    type=valid_url,
     help="Webhook URL(s) to send to.",
 )
+
 parser.add_argument(
     "-g",
     "--groupme",
     dest="groupmeBotId",
     nargs="+",
-    help="Send ENDEC messages to a GroupMe Group. Pass in the bot ID to use.",
+    help="Send ENDEC messages to a GroupMe Group(s). Pass in the bot ID(s) to use.",
+)
+parser.add_argument(
+    "-D",
+    "--discord",
+    dest="discordUrls",
+    nargs="+",
+    type=valid_url,
+    help="Discord webhook URL(s). Will post an embed with EAS fields.",
 )
 parser.add_argument(
     "-d",
@@ -101,27 +156,46 @@ group.add_argument(
 )
 
 args = parser.parse_args()
-requiredArgs = {"webhook": "webhookUrls", "groupme": "groupmeBotId"}
-
-if not any(getattr(args, arg) for arg in requiredArgs.values()):
-    ARG_LIST = ", ".join(f"--{opt}" for opt in requiredArgs)
-    parser.error(
-        f"At least one of the following arguments must be provided: {ARG_LIST}"
-    )
+if not (args.webhookUrls or args.groupmeBotId or args.discordUrls):
+    parser.error("You must provide at least one of: --webhook, --groupme, or --discord")
 
 if args.debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
-def parse_eas(eas_str):
+def parse_eas(header: str) -> dict:
     """
-    Parse the EAS string to extract the event and location.
-    ex: ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
+    Parse the EAS header into its components.
+
+    Ex: ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
+    Returns a dict with:
+    - orig:   Originator code (ORG)
+    - event:  Event code (EEE)
+    - event_name: Human name, if known
+    - location:  PSSCCC
+    - duration:  TTTT (minutes)
+    - start:     JJJHHMM (Julian day + HHMM)
+    - id:        LLLLLLLL (unique identifier)
     """
-    parts = eas_str.split("-")
-    event = parts[2]  # EEE
-    location = parts[3]  # PSSCCC
-    return event, location
+    # Strip start/stop markers and trailing dash
+    parts = header.strip("-").split("-")
+    orig, event, location_and_rest = parts[1], parts[2], parts[3]
+
+    # Location and time are joined by '+'
+    location, rest = location_and_rest.split("+", 1)
+    duration, timestamp, unique_id = rest.split("-", 2)
+
+    # Map event code to human name
+    name = EAS_EVENT_NAMES.get(event, "Unknown Event")
+    return {
+        "orig": orig,
+        "event": event,
+        "event_name": name,
+        "location": location,
+        "duration": duration,
+        "start": timestamp,
+        "id": unique_id,
+    }
 
 
 EAS_EVENT_NAMES = {
@@ -178,6 +252,57 @@ class Webhook:  # pylint: disable=too-few-public-methods
         return response
 
 
+class Discord:  # pylint: disable=too-few-public-methods
+    """
+    Send a Discord embed to one or more webhook URLs.
+    """
+
+    def __init__(self, urls: list):
+        self.urls = urls
+
+    def post(self, content: str, eas_fields: dict) -> None:
+        """
+        Send an embed with a description and fields:
+        - Event name & code
+        - Location
+        - Duration
+        - Start timestamp
+        - Original ID
+        """
+        embed = {
+            "title": "📢 EAS Message",
+            "description": content,
+            "fields": [
+                {
+                    "name": "Event",
+                    "value": f"{eas_fields.get('event_name')} ({eas_fields.get('event')})",
+                    "inline": True,
+                },
+                {
+                    "name": "Location",
+                    "value": eas_fields.get("location", "n/a"),
+                    "inline": True,
+                },
+                {
+                    "name": "Duration",
+                    "value": f"{eas_fields.get('duration')} min",
+                    "inline": True,
+                },
+                {
+                    "name": "Start",
+                    "value": eas_fields.get("start", "n/a"),
+                    "inline": True,
+                },
+                {"name": "ID", "value": eas_fields.get("id", "n/a"), "inline": False},
+            ],
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        payload = {"embeds": [embed]}
+        for url in self.urls:
+            logging.info("Posting EAS to Discord webhook %s", url)
+            requests.post(url, json=payload, timeout=10)
+
+
 class GroupMe:  # pylint: disable=too-few-public-methods
     """
     Operations for sending messages to a GroupMe group via a Bot.
@@ -210,7 +335,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         """
         footer = (
             "\n\nThis message was sent using OpenENDEC V2\n"
-            "[github/WBOR-91-1-FM/wbor-endec]\n----------"
+            "[WBOR-91-1-FM/wbor-endec]\n----------"
         )
         body = f"{message_content}{footer}"
 
@@ -239,16 +364,17 @@ class GroupMe:  # pylint: disable=too-few-public-methods
 
 def post_message(
     message_content: str,
-    eas: str,
+    eas_fields: dict,
     webhook_urls: list = None,
     groupme_bot_ids: list = None,
+    discord_urls: list = None,
 ) -> None:
     """
-    Send News Feed object message payload to specified webhooks.
+    Send News Feed object message payload to specified destinations.
 
     Parameters:
     - message_content (str): The message content to send.
-    - eas (str): The EAS message if available.
+    - eas (str): The EAS message, if available.
     - webhook_urls (list, optional): List of webhook URLs. Defaults to
         None.
     - groupme_bot_ids (list, optional): List of GroupMe bot IDs.
@@ -261,11 +387,14 @@ def post_message(
     # Post to each webhook URL provided
     if webhook_urls:
         for url in webhook_urls:
-            Webhook(url=url, eas=eas).post(message_content)
+            Webhook(url=url, eas=eas_fields).post(message_content)
 
     # Post to GroupMe if bot IDs are provided
     if groupme_bot_ids:
         GroupMe(bot_ids=groupme_bot_ids).post(message_content)
+
+    if discord_urls:
+        Discord(discord_urls).post(message_content, eas_fields)
 
 
 def process_newsfeed(process_args: argparse.Namespace) -> None:
@@ -288,19 +417,24 @@ def process_newsfeed(process_args: argparse.Namespace) -> None:
         Transform the lines of the EAS message according to the
         specified arguments and post to webhooks.
         """
-        eas = ""
+        eas_fields = {}
         if process_args.trim and lines:
+            # Remove the final line (EAS message), don't save it
             lines.pop()
         if process_args.fork and lines:
-            eas = lines.pop()
+            # Remove the final line (EAS message) and pass in to post
+            eas_header = lines.pop()
+            eas_fields = parse_eas(eas_header)
         if process_args.quiet and lines:
+            # Remove human readable text, only keep EAS message
             lines = [lines[-1]]
         message = " ".join(lines)
         post_message(
             message_content=message,
-            eas=eas,
+            eas_fields=eas_fields,
             webhook_urls=process_args.webhookUrls,
             groupme_bot_ids=process_args.groupmeBotId,
+            discord_urls=process_args.discordUrls,
         )
 
     while True:
