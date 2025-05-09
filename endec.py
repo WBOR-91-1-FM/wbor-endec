@@ -1,13 +1,18 @@
 """
+OpenENDEC V3
 Decode NewsFeed EAS messages from a Sage Digital ENDEC and forward them
-to a webhook URL or a GroupMe group.
+to Discord, GroupMe or generic webhook URLs.
+
+The executable reads:
+- a public config file (JSON) passed via --config
+- a secrets file provided by systemd LoadCredential (or a fallback path)
 
 Authors:
     - Evan Vander Stoep <@evanvs>
     - Mason Daugherty <@mdrxy>
 
-Version: 2.1.2
-Last Modified: 2025-05-08
+Version: 3.0.0
+Last Modified: 2025-05-09
 
 Changelog:
     - 1.0.0 (????): Initial release <@evanvs>
@@ -15,188 +20,157 @@ Changelog:
     - 2.1.0 (2024-08-08): Refactored for better readability and added
         support for GroupMe <@mdrxy>
     - 2.1.2 (2025-05-08): Refactor
+    - 3.0.0 (2025-05-09): Secure refactor
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import logging
 import os
+import re
 import stat
 import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 import requests
 from serial import Serial
 from serial.serialutil import SerialException
 
-LOGFILE = "openendec.log"
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+LOGGER = logging.getLogger("openendec")
 
 
-def valid_port(path: str) -> str:
+def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
     """
-    Validate the provided serial port path.
+    Configure root logger.
+    """
+
+    handlers: List[logging.Handler] = []
+    fmt = "% (asctime)s - %(levelname)s - %(message)s"
+
+    if logfile:
+        try:
+            file_handler = logging.FileHandler(logfile, encoding="utf-8")
+            file_handler.setFormatter(logging.Formatter(fmt))
+            handlers.append(file_handler)
+        except OSError:
+            # Fall back to stderr only
+            pass
+
+    handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO, handlers=handlers, format=fmt
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    """
+    Load JSON file and return the contents as a dictionary.
+
+    Parameters:
+    - path (Path): The path to the JSON file.
+
+    Returns:
+    - Dict[str, Any]: The contents of the JSON file as a dictionary.
+    """
+    with path.open("r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+def _validate_serial_port(path: str) -> str:
+    """
+    Validate that the given path is a valid serial port.
 
     Parameters:
     - path (str): The path to the serial port.
 
-    Returns:
-    - str: The validated serial port path.
-
     Raises:
     - argparse.ArgumentTypeError: If the path does not exist or is not a
         character device.
+
+    Returns:
+    - str: The validated serial port path.
     """
-    if not os.path.exists(path):
-        raise argparse.ArgumentTypeError(f"Serial port '{path}' not found")
+    if not Path(path).exists():
+        raise argparse.ArgumentTypeError(f"Serial port `{path}` not found")
     if not stat.S_ISCHR(os.stat(path).st_mode):
-        raise argparse.ArgumentTypeError(f"{path} exists but isn't a character device")
+        raise argparse.ArgumentTypeError(
+            f"`{path}` exists but is not a character device"
+        )
     return path
 
 
-def valid_url(u: str) -> str:
+def _validate_url(u: str) -> str:
     """
-    Validate the provided URL.
+    Validate that the given string is a valid URL.
 
     Parameters:
     - u (str): The URL to validate.
 
-    Returns:
-    - str: The validated URL.
-
     Raises:
     - argparse.ArgumentTypeError: If the URL is invalid.
+
+    Returns:
+    - str: The validated URL.
     """
     p = urlparse(u)
     if p.scheme not in ("http", "https") or not p.netloc:
-        raise argparse.ArgumentTypeError(f"Invalid webhook URL: {u!r}")
+        raise argparse.ArgumentTypeError(f"Invalid URL: {u!r}")
     return u
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-c",
-    "--com",
-    dest="port",
-    default="/dev/ttyUSB0",
-    type=valid_port,
-    help="Select the port the device is on. Default is /dev/ttyUSB0",
-)
-parser.add_argument(
-    "-w",
-    "--webhook",
-    dest="webhookUrls",
-    nargs="+",
-    type=valid_url,
-    help="Webhook URL(s) to send to.",
-)
-
-parser.add_argument(
-    "-g",
-    "--groupme",
-    dest="groupmeBotId",
-    nargs="+",
-    help="Send ENDEC messages to a GroupMe Group(s). Pass in the bot ID(s) to use.",
-)
-parser.add_argument(
-    "-D",
-    "--discord",
-    dest="discordUrls",
-    nargs="+",
-    type=valid_url,
-    help="Discord webhook URL(s). Will post an embed with EAS fields.",
-)
-parser.add_argument(
-    "-d",
-    "--debug",
-    dest="debug",
-    action="store_true",
-    default=False,
-    help="Enable debug logging.",
-)
-
-group = parser.add_mutually_exclusive_group()
-group.add_argument(
-    "-t",
-    "--trim",
-    dest="trim",
-    action="store_true",
-    default=False,
-    help=(
-        "Trim the EAS message from the body before sending, destroying it. "
-        '"message" will contain the human readable text ONLY.'
-    ),
-)
-group.add_argument(
-    "-f",
-    "--fork",
-    dest="fork",
-    action="store_true",
-    default=False,
-    help=(
-        'Trim the EAS message from the body and send it as "eas" in the webhook '
-        'payload. "message" will contain the human readable text.'
-    ),
-)
-group.add_argument(
-    "-q",
-    "--quiet",
-    dest="quiet",
-    action="store_true",
-    default=False,
-    help=(
-        "Trim the human readable text from the message before sending. destroying it. "
-        'ONLY the EAS message will be sent (as "message").'
-    ),
-)
-
-args = parser.parse_args()
-if not (args.webhookUrls or args.groupmeBotId or args.discordUrls):
-    parser.error("You must provide at least one of: --webhook, --groupme, or --discord")
-
-logging.basicConfig(
-    filename=LOGFILE,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s : %(message)s",
-)
-
-if args.debug:
-    logging.basicConfig(level=logging.DEBUG)
-
-
-def parse_eas(header: str) -> dict:
+class Settings:  # pylint: disable=too-few-public-methods
     """
-    Parse the EAS header into its components.
-
-    Ex: ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
-    Returns a dict with:
-    - orig:   Originator code (ORG)
-    - event:  Event code (EEE)
-    - event_name: Human name, if known
-    - location:  PSSCCC
-    - duration:  TTTT (minutes)
-    - start:     JJJHHMM (Julian day + HHMM)
-    - id:        LLLLLLLL (unique identifier)
+    Runtime configuration merged from config + secrets.
     """
-    # Strip start/stop markers and trailing dash
-    parts = header.strip("-").split("-")
-    orig, event, location_and_rest = parts[1], parts[2], parts[3]
 
-    # Location and time are joined by '+'
-    location, rest = location_and_rest.split("+", 1)
-    duration, timestamp, unique_id = rest.split("-", 2)
+    def __init__(self, public_cfg: Dict[str, Any], secrets: Dict[str, Any]):
+        """
+        Initialize the Settings object with public and secret
+        configurations.
 
-    # Map event code to human name
-    name = EAS_EVENT_NAMES.get(event, "Unknown Event")
-    return {
-        "orig": orig,
-        "event": event,
-        "event_name": name,
-        "location": location,
-        "duration": duration,
-        "start": timestamp,
-        "id": unique_id,
-    }
+        Parameters:
+        - public_cfg (Dict[str, Any]): The public configuration
+            dictionary.
+        - secrets (Dict[str, Any]): The secret configuration dictionary.
 
+        Raises:
+        - RuntimeError: If no destinations are configured.
+        """
+        port = public_cfg.get("port", "/dev/ttyUSB0")
+        self.port = _validate_serial_port(port)
+
+        self.debug: bool = bool(public_cfg.get("debug", False))
+        self.logfile: str | None = public_cfg.get("logfile")
+
+        raw_webhooks = secrets.get("webhooks", [])
+        self.webhooks = [_validate_url(u) for u in raw_webhooks]
+
+        raw_discord = secrets.get("discord_urls", [])
+        self.discord_urls = [_validate_url(u) for u in raw_discord]
+
+        self.groupme_bot_ids: List[str] = secrets.get("groupme_bot_ids", [])
+
+        if not (self.webhooks or self.groupme_bot_ids or self.discord_urls):
+            raise RuntimeError("No destinations configured - aborting")
+
+
+# ---------------------------------------------------------------------------
+# EAS helpers
+# ---------------------------------------------------------------------------
 
 EAS_EVENT_NAMES = {
     # Administrative & Test Events
@@ -285,73 +259,164 @@ EAS_EVENT_NAMES = {
     "WFW": "Wild Fire Warning",
 }
 
+HEADER_RE = re.compile(
+    r"^ZCZC-"  # start
+    r"(?P<org>[A-Z]{3})-"  # ORG
+    r"(?P<event>[A-Z]{3})-"  # EEE
+    r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
+    r"\+(?P<dur>\d{4})-"  # +TTTT
+    r"(?P<ts>\d{7})-"  # JJJHHMM
+    r"(?P<sender>[A-Z0-9/]{8})-"  # LLLLLLLL
+    r"$"
+)
+
+
+def parse_eas(header: str) -> Dict[str, str]:
+    """
+    Parse the EAS header and return a dictionary with the parsed fields.
+    The input header format is expected to be:
+
+    ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
+
+    Every field is fixed-width, made of 7-bit ASCII, separated by the
+    literal dash ( - ), with a single plus ( + ) introducing the
+    valid-time field.
+
+    where:
+    - ZCZC: EAS header start (fixed)
+    - ORG: Originator code (EAS, CIV, WXR, PEP) (A-Z, 3 chars)
+    - EEE: Event code (e.g. TOR, RWT, EAN. 80+ defined) (A-Z, 3 chars)
+    - PSSCCC: Location code (e.g. 12345, 123456) (0-9 chars)
+    - +: Separator (fixed)
+    - TTTT: Duration (Valid time in hhmm) (4 digits)
+    - JJJHHMM: Issue/start time (UTC, JJJ = day-of-year 001-366,
+        HHMM = 24-h time) (8 digits)
+    - LLLLLLLL: ID of the sending station (8 chars)
+    - -: End of header (fixed)
+
+    This function:
+    - Locks every field to spec widths
+    - Handles up to 31 locations
+    - Keeps trailing dash
+    - Converts duration and timestamp immediately
+
+    Parameters:
+    - header (str): The EAS header string to parse.
+
+    Returns:
+    - Dict[str, str]: A dictionary containing the parsed fields:
+        - org: Originator code
+        - event: Event code
+        - locs: List of location codes
+        - duration_minutes: Duration in minutes
+        - duration_raw: Raw duration string
+        - start_utc: Start time in ISO UTC format
+        - timestamp_raw: Raw timestamp string
+        - sender: Sender ID
+        - event_name: Human-readable event name (if available)
+        - raw_header: The original header string
+    """
+    m = HEADER_RE.match(header)
+    if not m:
+        raise ValueError("Malformed EAS header")
+
+    g = m.groupdict()
+
+    # Duration to minutes
+    hours, mins = divmod(int(g["dur"]), 100)
+    duration_minutes = hours * 60 + mins
+
+    # JJJHHMM to ISO UTC (current year)
+    jjj, hh, mm = int(g["ts"][:3]), int(g["ts"][3:5]), int(g["ts"][5:])
+    y_start = datetime.utcnow().replace(
+        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    start_utc = (y_start + timedelta(days=jjj - 1, hours=hh, minutes=mm)).strftime(
+        "%Y-%m-%dT%H:%MZ"
+    )
+
+    return {
+        "org": g["org"],
+        "event": g["event"],
+        "locs": g["locs"].split("-"),
+        "duration_minutes": duration_minutes,
+        "duration_raw": g["dur"],
+        "start_utc": start_utc,
+        "timestamp_raw": g["ts"],
+        "sender": g["sender"],
+        "event_name": EAS_EVENT_NAMES.get(g["event"], "Unknown"),
+        "raw_header": header,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Destinations
+# ---------------------------------------------------------------------------
+
 
 class Webhook:  # pylint: disable=too-few-public-methods
     """
-    Generic class for sending messages to a webhook URL.
+    Generic webhook POST client.
+
+    This class is used to send POST requests to a specified webhook URL.
     """
 
-    def __init__(self, url: str = None, eas: str = None, headers: dict = None) -> None:
+    def __init__(self, url: str):
         """
-        Initialize Webhook instance.
+        Initialize the Webhook object with the specified URL.
 
         Parameters:
-        - url (str, optional): Webhook URL. Defaults to None.
-        - eas (str, optional): EAS message. Defaults to None.
-        - headers (dict, optional): Custom headers. Defaults to json.
+        - url (str): The webhook URL to send POST requests to.
         """
-        self.headers = headers or {"Content-Type": "application/json"}
         self.url = url
-        self.eas = eas
+        self.headers = {"Content-Type": "application/json"}
 
-    def post(self, message_content: str) -> requests.Response:
+    def post(self, payload: Dict[str, Any]) -> None:
         """
-        Generic POST request to a webhook URL.
+        Send a POST request to the webhook URL with the given payload.
 
         Parameters:
-        - message_content (str): The message to send to the webhook.
-
-        Returns:
-        - requests.Response: Response from the webhook.
+        - payload (Dict[str, Any]): The payload to send in the POST
+            equest.
 
         Raises:
-        - requests.exceptions.RequestException: If the request fails.
+        - requests.RequestException: If the POST request fails.
         """
-        payload = {"message": message_content}
-
-        if self.eas:
-            payload["eas"] = self.eas
-
-        logging.info(
-            "Making POST to `%s` with payload: %s", self.url, json.dumps(payload)
-        )
-        response = requests.post(
-            self.url, headers=self.headers, json=payload, timeout=10
-        )
-        logging.debug("Response from `%s`: %s", self.url, response.text)
-        return response
+        LOGGER.info("POST to `%s`", self.url)
+        try:
+            resp = requests.post(
+                self.url, headers=self.headers, json=payload, timeout=10
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            LOGGER.warning("Webhook POST to `%s` failed: %s", self.url, exc)
 
 
 class Discord:  # pylint: disable=too-few-public-methods
     """
-    Send a Discord embed to one or more webhook URLs.
+    Discord webhook client.
     """
 
-    def __init__(self, urls: list):
+    def __init__(self, urls: List[str]):
+        """
+        Initialize the Discord object with a list of webhook URLs.
+
+        Parameters:
+        - urls (List[str]): A list of Discord webhook URLs to send
+            messages to.
+        """
         self.urls = urls
 
-    def post(self, content: str, eas_fields: dict) -> None:
+    def post(self, content: str, eas_fields: Dict[str, str]) -> None:
         """
-        Send an embed with a description and fields:
-        - Event name & code
-        - Location
-        - Duration
-        - Start timestamp
-        - Original ID
+        Send a message to Discord with the given content and EAS fields.
+
+        Parameters:
+        - content (str): The message content to send.
+        - eas_fields (Dict[str, str]): A dictionary containing EAS
+            fields to include in the message as embedded fields.
         """
         duration = eas_fields.get("duration")
-        duration_str = f"{duration} min" if duration else "not found"
-
         embed = {
             "title": "EAS Message",
             "description": content,
@@ -363,222 +428,214 @@ class Discord:  # pylint: disable=too-few-public-methods
                 },
                 {
                     "name": "Location",
-                    "value": eas_fields.get("location", "Not found"),
+                    "value": eas_fields.get("location", "not found"),
                     "inline": True,
                 },
                 {
                     "name": "Duration",
-                    "value": duration_str,
+                    "value": f"{duration} min" if duration else "not found",
                     "inline": True,
                 },
                 {
                     "name": "Start",
-                    "value": eas_fields.get("start", "Not found"),
+                    "value": eas_fields.get("start", "not found"),
                     "inline": True,
                 },
                 {
                     "name": "ID",
-                    "value": eas_fields.get("id", "Not found"),
+                    "value": eas_fields.get("id", "not found"),
                     "inline": False,
                 },
             ],
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         payload = {"embeds": [embed]}
-        for url in self.urls:
-            logging.info("Posting EAS to Discord webhook %s", url)
-            response = requests.post(url, json=payload, timeout=10)
-            logging.debug("Response from `%s`: %s", url, response.text)
+        for u in self.urls:
+            Webhook(u).post(payload)
 
 
 class GroupMe:  # pylint: disable=too-few-public-methods
     """
-    Operations for sending messages to a GroupMe group via a Bot.
+    GroupMe bot client.
     """
 
-    def __init__(self, bot_ids: list, headers: dict = None) -> None:
+    def __init__(self, bot_ids: List[str]):
         """
-        Initialize GroupMe instance.
+        Initialize the GroupMe object with a list of bot IDs.
 
         Parameters:
-        - bot_ids (list): List of GroupMe bot IDs.
-        - headers (dict, optional): Custom headers. Defaults to None.
+        - bot_ids (List[str]): A list of GroupMe bot IDs to send
+            messages to.
         """
-        self.url = "https://api.groupme.com/v3/bots/post"
         self.bot_ids = bot_ids
-        self.headers = headers or {"Content-Type": "application/json"}
+        self.url = "https://api.groupme.com/v3/bots/post"
 
-    def post(self, message_content: str) -> list:
+    def post(self, message: str) -> None:
         """
-        Post message to a GroupMe group via a Bot ID.
+        Send a message to GroupMe with the given content via a Bot ID.
 
         Parameters:
-        - message_content (str): The message to send to GroupMe.
-
-        Returns:
-        - list: List of responses from GroupMe API for each bot.
-
-        Raises:
-        - requests.exceptions.RequestException: If any request fails.
+        - message (str): The message content to send.
         """
         footer = (
             "\n\nThis message was sent using OpenENDEC V2\n"
             "[WBOR-91-1-FM/wbor-endec]\n----------"
         )
-        body = f"{message_content}{footer}"
+        body = f"{message}{footer}"
 
         # Split body into 500 character segments (max length for GroupMe messages)
         segments = [body[i : i + 500] for i in range(0, len(body), 500)]
-        responses = []
-
         for segment in segments:
-            # Forward to all bots specified
             for bot_id in self.bot_ids:
-                # Schema: https://dev.groupme.com/docs/v3#bots_post
                 payload = {"bot_id": bot_id, "text": segment}
-                logging.debug("Making POST to GroupMe with payload: %s", payload)
-                logging.info("Making POST to GroupMe")
-                response = requests.post(
-                    self.url, headers=self.headers, json=payload, timeout=10
-                )
-                responses.append(response)
-                if response.text:
-                    logging.debug("GroupMe's response: %s", response.text)
-                else:
-                    logging.info("GroupMe POST successful")
-
-        return responses
+                Webhook(self.url).post(payload)
 
 
-def post_message(
-    message_content: str,
-    eas_fields: dict,
-    webhook_urls: list = None,
-    groupme_bot_ids: list = None,
-    discord_urls: list = None,
-) -> None:
+# ---------------------------------------------------------------------------
+# Message dispatch
+# ---------------------------------------------------------------------------
+
+
+def dispatch(msg: str, eas_fields: Dict[str, str], cfg: Settings) -> None:
     """
-    Send News Feed object message payload to specified destinations.
+    Dispatch the message to the configured destinations.
 
     Parameters:
-    - message_content (str): The message content to send.
-    - eas (str): The EAS message, if available.
-    - webhook_urls (list, optional): List of webhook URLs. Defaults to
-        None.
-    - groupme_bot_ids (list, optional): List of GroupMe bot IDs.
-        Defaults to None.
-
-    Raises:
-    - requests.exceptions.RequestException: If any request to a webhook f
-        ails.
+    - msg (str): The message content to send.
+    - eas_fields (Dict[str, str]): A dictionary containing EAS fields to
+        include in the message.
+    - cfg (Settings): The runtime configuration object containing
+        destination information.
     """
-    # Post to each webhook URL provided
-    if webhook_urls:
-        for url in webhook_urls:
-            Webhook(url=url, eas=eas_fields).post(message_content)
+    payload = {"message": msg, "eas": eas_fields} if eas_fields else {"message": msg}
+    for url in cfg.webhooks:
+        Webhook(url).post(payload)
 
-    # Post to GroupMe if bot IDs are provided
-    if groupme_bot_ids:
-        GroupMe(bot_ids=groupme_bot_ids).post(message_content)
+    # Multi-destination is handled by the Discord and GroupMe classes
+    # so we don't need to loop through them here.
+    if cfg.discord_urls:
+        Discord(cfg.discord_urls).post(msg, eas_fields)
 
-    if discord_urls:
-        Discord(discord_urls).post(message_content, eas_fields)
+    if cfg.groupme_bot_ids:
+        GroupMe(cfg.groupme_bot_ids).post(msg)
 
 
-def process_newsfeed(process_args: argparse.Namespace) -> None:
+# ---------------------------------------------------------------------------
+# Serial processing loop
+# ---------------------------------------------------------------------------
+
+
+def process_serial(cfg: Settings) -> None:
     """
-    Continuously decodes News Feed objects from the provided serial
-    port.
+    Main event loop for processing serial input.
+    This function continuously reads from the serial port and processes
+    incoming News Feed messages.
 
     Parameters:
-    - process_args: Namespace with attributes port, trim, fork, quiet,
-        webhookUrls, groupmeBotId.
+    - cfg (Settings): The runtime configuration object containing serial
+        port information.
 
     Raises:
-    - serial.SerialException: If the serial connection fails.
-    - requests.exceptions.RequestException: If any webhook request
-        fails.
+    - SerialException: If there is an error with the serial port.
+    - requests.RequestException: If there is an error with the webhook
     """
 
-    def transform_and_post(lines: list) -> None:
+    def transform_and_send(lines: List[str]) -> None:
         """
-        Transform the lines of the EAS message according to the
-        specified arguments and post to webhooks.
+        Transform the incoming lines into a message and send it to the
+        configured destinations.
+
+        Parameters:
+        - lines (List[str]): The list of lines read from the serial
+            port.
         """
-        eas_fields = {}
-        if process_args.trim and lines:
-            # Remove the final line (EAS message), don't save it
-            lines.pop()
-        if process_args.fork and lines:
-            # Remove the final line (EAS message) and pass in to post
-            eas_header = lines.pop()
-            logging.debug("About to parse EAS header: %r", eas_header)
-            eas_fields = parse_eas(eas_header)
-            logging.debug("Parsed EAS fields: %s", eas_fields)
-        if process_args.quiet and lines:
-            # Remove human readable text, only keep EAS message
-            lines = [lines[-1]]
+        eas_fields: Dict[str, str] = {}
+
+        # Strip final header line
+        if lines and lines[-1].startswith("ZCZC"):
+            eas_fields = parse_eas(lines.pop())
+
         message = " ".join(lines)
-        post_message(
-            message_content=message,
-            eas_fields=eas_fields,
-            webhook_urls=process_args.webhookUrls,
-            groupme_bot_ids=process_args.groupmeBotId,
-            discord_urls=process_args.discordUrls,
-        )
+        dispatch(message, eas_fields, cfg)
 
     while True:
         ser = None
         try:
-            ser = Serial(process_args.port, baudrate=9600, bytesize=8, stopbits=1)
-            logging.debug("Serial port opened on `%s`", process_args.port)
+            ser = Serial(cfg.port, baudrate=9600, bytesize=8, stopbits=1)
+            LOGGER.debug("Serial port `%s` opened", cfg.port)
 
             while ser.isOpen():
-                logging.debug("Entering read loop on %s", process_args.port)
+                LOGGER.debug("Entering read loop on `%s`", cfg.port)
 
                 raw = ser.readline()
-                logging.debug("Raw input: %r", raw)
-
+                LOGGER.debug("Raw input: %r", raw)
                 line = raw.decode("utf-8", errors="ignore")
+
+                if "<ENDECSTART>" in line:
+                    LOGGER.debug("Found <ENDECSTART> in line: %r", line)
+
                 if "<ENDECSTART>" not in line:
                     continue
 
-                if "<ENDECSTART>" in line:
-                    logging.debug("Found <ENDECSTART> in line: %r", line)
-
-                # Collect lines until reaching the end marker
-                buffer = []
+                # Read until <ENDECEND> is found
+                buffer: List[str] = []
                 for raw2 in iter(ser.readline, b""):
                     chunk = raw2.decode("utf-8", errors="ignore")
                     if "<ENDECEND>" in chunk:
                         break
                     buffer.append(chunk.strip())
 
-                # Process the collected lines
+                # Process the buffer
                 if buffer:
-                    logging.debug(
+                    LOGGER.debug(
                         "Collected %d lines for one EAS payload: %s",
                         len(buffer),
                         buffer,
                     )
-                    transform_and_post(buffer)
-
-        except (SerialException, requests.exceptions.RequestException) as exc:
-            logging.debug("Exception caught, will retry: %s", exc, exc_info=True)
+                    transform_and_send(buffer)
+        except (SerialException, requests.RequestException) as exc:
+            LOGGER.warning("Serial loop error: %s", exc)
         finally:
             if ser and ser.isOpen():
                 ser.close()
-                logging.info("Closed serial port %s", process_args.port)
-            logging.info("Reconnecting to serial port...")
+                LOGGER.debug("Serial port `%s` closed", cfg.port)
             time.sleep(5)
 
 
-if __name__ == "__main__":
-    logging.info(
-        "OpenENDEC V2\n"
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:  # pylint: disable=missing-function-docstring
+    # Get public config
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config", required=True, type=Path, help="Path to public config JSON"
+    )
+    args = parser.parse_args()
+    public_cfg = _load_json(args.config)
+
+    # Get secrets
+    cred_dir = Path(os.getenv("CREDENTIALS_DIRECTORY", "/etc/openendec"))
+    secret_path = cred_dir / "secrets.json"
+    secrets = _load_json(secret_path)
+
+    # Merge configs
+    cfg = Settings(public_cfg, secrets)
+
+    _lazy_setup_logging(cfg.debug, cfg.logfile)
+
+    LOGGER.info("OpenENDEC V3 starting - serial on `%s`", cfg.port)
+    LOGGER.info(
         "Originally Written By: Evan Vander Stoep [https://github.com/EvanVS]\n"
         "Modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM [https://wbor.org]\n\n"
-        "Logger Started!\nLogs will be stored at %s",
-        LOGFILE,
+        "Logger Started!\n"
     )
-    process_newsfeed(args)
+
+    # Launch main loop
+    process_serial(cfg)
+
+
+if __name__ == "__main__":
+    main()

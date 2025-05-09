@@ -6,31 +6,59 @@
 >
 > THIS IS *NOT* AN EAS DECODER
 
-An Open Source EAS ENDEC Logger to transmit News Feed messages recieved by a Sage Digital ENDEC Hardware Unit to a webhook/external destination.
+A secure, Open Source EAS ENDEC Logger to transmit News Feed messages recieved by a Sage Digital ENDEC Hardware Unit to external destinations.
 
-News Feed spec: [section 9.4 (pg. 70) of the ENDEC manual](https://www.sagealertingsystems.com/docs/digital_endec_1_0.pdf)
+## News Feed & EAS Specs
 
-EAS protocol specification: [47 CFR 11.31](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31)
+- News Feed spec: [section 9.4 (pg. 70) of the ENDEC manual](https://www.sagealertingsystems.com/docs/digital_endec_1_0.pdf)
+- EAS protocol specification: [47 CFR 11.31](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31)
 
 ## Features
 
-- Supports multiple concurrent transmission destinations
-- Argument validation
+- Supports multiple concurrent transmission destinations:
+  - Generic HTTP(S) webhooks
+  - GroupMe bot
+  - Discord embed
+  - In the future, we would be open to PRs for other destinations, such as:
+    - [ ] Slack
+    - [ ] Email (SMTP)
+    - [ ] Twilio
 
-**Destinations:**
+## Configuration
 
-- Generic webhook
-- GroupMe
-- [ ] Discord
+### Public settings (`config.json`)
 
-In the future, we would be open to PRs for other destinations, such as:
+```json
+{
+  "port": "/dev/ttyUSB0",
+  "logfile": "/var/log/openendec/openendec.log",
+  "debug": false
+}
+```
 
-- [ ] Slack
-- [ ] Email (SMTP)
-- [ ] Twilio
+- `port`: The device to read from. This is the `/dev/` port for your ENDEC hardware. For example, if your ENDEC is connected to `/dev/ttyUSB0`, you would use `/dev/ttyUSB0`.
+- `logfile`: The (optional) path to the log file. This is where OpenEndec will write its logs if specified. Make sure the user running OpenEndec has write permissions to this file. If not specified, logs go to `stderr`/`journal`.
+- `debug`: Set to `true` to enable debug level logging.
 
-## Options
+Save as `/etc/openendec/config.json` (0644).
 
+### Private credentials (`secrets.json`)
+
+```json
+{
+  "webhooks": ["https://example.com/webhook1", "https://example.com/webhook2"],
+  "groupme_bot_ids": ["abcd1234", "efgh5678"],
+  "discord_urls": ["https://discord.com/api/webhooks/...", "..."]
+}
+```
+
+- `webhooks`: List of webhook URLs to forward EAS messages to. These can be any HTTP(S) endpoint that accepts POST requests.
+- `groupme_bot_ids`: List of GroupMe bot IDs to forward EAS messages to. These can be found in the GroupMe developer portal (public, free).
+- `discord_urls`: List of Discord webhook URLs to forward EAS messages to. You can create a webhook in your Discord server channel settings.
+
+Save in a directory managed by systemd's `LoadCredential` (e.g. `/etc/openendec/`) as `secrets.json` with permissions `0600` and owner `root:root`.
+
+--------------OLD
 `--com / -c`: The device to read from. This is the `/dev/` port for your ENDEC hardware. For example, if your ENDEC is connected to `/dev/ttyUSB0`, you would use `-c /dev/ttyUSB0`.
 
 `--trim / -t`: Trim the EAS message from the body before sending, which is always the final line. EAS messages follow the [format](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31): `ZCZC-ORG-EEE-PSSCCC + TTTT-JJJHHMM-LLLLLLLL-`
@@ -42,8 +70,9 @@ In the future, we would be open to PRs for other destinations, such as:
 `--webhook / -w {URL_1, URL_2, ...}`: Webhook URL(s) to forward EAS messages to.
 
 `--groupme / -g {BOT_ID_1, BOT_ID_2, ...}`: GroupMe bot(s) to forward EAS messages to.
+--------------OLD
 
-## Installation
+## Installation & usage
 
 **Example scenario:**
 
@@ -62,14 +91,14 @@ In the future, we would be open to PRs for other destinations, such as:
 6. Start monitoring the ENDEC by running the script:
 
     ```sh
-    python3 OpenEndecV2.py -c {YOUR-DEVICE} {OPTIONS}
+    python3 endec.py --config /etc/openendec/config.json
     ```
 
-    {YOUR DEVICE} is the `/dev/` port we found in step 3. So, in this example, we use `/dev/ttyUSB0`.
+    - Reads public settings from `--config` path
+    - Loads secrets from `$CREDENTIALS_DIRECTORY/secrets.json` or `/etc/openendec/secrets.json`
+    - Validates port and URLs, then begins reading `<ENDECSTART>…<ENDECEND>` payloads and forwards messages
 
-    [{OPTIONS}](#options) specifies the [destinations](#destinations) OpenEndec should forward EAS messages to.
-
-### Running as a System Service
+### Running as a Systemd Service
 
 ```sh
 sudo nano /etc/systemd/system/wbor-endec.service
@@ -106,3 +135,5 @@ After updating (pulling from this repo), be sure to run:
 sudo systemctl daemon-reload
 sudo systemctl restart wbor-endec.service
 ```
+
+Maintained by WBOR 91.1 FM and [Mason Daugherty](https://github.com/mdrxy), originally inspired by [Evan Vander Stoep](https://github.com/evanvs).

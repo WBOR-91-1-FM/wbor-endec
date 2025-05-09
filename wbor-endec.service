@@ -5,13 +5,17 @@ After={DEVICE}
 After=network.target
 
 [Service]
-ExecStart={PYTHON_EXEC} {SCRIPT_PATH} {COMMAND LINE OPTIONS}
+Type=simple
+ExecStart={PYTHON3_EXEC_PATH} {ENDEC_SCRIPT_PATH} --config {PATH_TO_CONFIG_JSON}
+# systemd v251+ mounts secrets.json into memfd
+LoadCredential=secrets.json:/etc/openendec/secrets.json
 WorkingDirectory={SAME DIR CONTAINING SCRIPT_PATH}
-User=
+User={MACHINE_USER}
 Restart=always
-RestartSec=10
-StandardOutput=inherit
-StandardError=inherit
+RestartSec=5
+# Avoid leaking secrets
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
