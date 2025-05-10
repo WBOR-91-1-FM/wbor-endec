@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import pika
 import requests
@@ -730,6 +731,14 @@ def parse_eas(header: str) -> Dict[str, Any]:
     # Clean up space-padded sender
     sender = g["sender"].rstrip()
 
+    # Get a human readable sender name equivalent
+    org_human = {
+        "EAS": "Emergency Alert System",
+        "CIV": "Civil Authorities",
+        "WXR": "National Weather Service",
+        "PEP": "Primary Entry Point (National)",
+    }.get(g["org"], g["org"])
+
     # JJJHHMM to ISO UTC (current year)
     jjj, hh, mm = int(g["ts"][:3]), int(g["ts"][3:5]), int(g["ts"][5:])
 
@@ -745,7 +754,8 @@ def parse_eas(header: str) -> Dict[str, Any]:
     locs = [_lookup_location(loc) for loc in raw_locs]
 
     return {
-        "org": g["org"],
+        "org_raw": g["org"],
+        "org": org_human,
         "event": g["event"],
         "locs": locs,  # Human-readable location names
         "raw_locs": raw_locs,  # Raw location codes
@@ -884,8 +894,15 @@ class Discord:  # pylint: disable=too-few-public-methods
             },
             # Timestamp Raw
             {
-                "name": "Timestamp (Raw)",
-                "value": eas_fields.get("timestamp_raw", "N/A"),
+                "name": "Start (ET)",
+                "value": (
+                    datetime.strptime(
+                        eas_fields.get("timestamp_raw", "0010000"), "%j%H%M"
+                    )
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(ZoneInfo("America/New_York"))
+                    .strftime("%Y-%m-%d %H:%M")
+                ),
                 "inline": True,
             },
             # All location codes
@@ -1102,7 +1119,7 @@ def process_serial(
             try:
                 eas_fields = parse_eas(header_line)
                 LOGGER.info(
-                    "Parsed EAS Header: %s (%s)",
+                    "New EAS Header: %s (%s)",
                     eas_fields.get("event_name"),
                     eas_fields.get("event"),
                 )
