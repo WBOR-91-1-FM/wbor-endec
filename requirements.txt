@@ -1,3 +1,4 @@
 pyserial
 Requests
 pika
+backports.zoneinfo

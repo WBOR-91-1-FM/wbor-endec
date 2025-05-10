@@ -65,7 +65,6 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
             handlers.append(file_handler)
         except OSError:
             LOGGER.warning("Could not open logfile %s, falling back to stderr", logfile)
-            pass
 
     # Stream handler for console output
     stream_handler = logging.StreamHandler()
@@ -437,7 +436,8 @@ def _load_location_map() -> tuple[dict[str, str], dict[str, str]]:
     fn = Path(__file__).parent / "national_county.txt"
     if not fn.exists():
         LOGGER.warning(
-            f"Location map file not found: {fn}. Location lookups will fail."
+            "Location map file not found: %s. Location lookups will fail.",
+            fn,
         )
         return loc_map, state_map
 
@@ -973,11 +973,10 @@ class GroupMe:  # pylint: disable=too-few-public-methods
             f"Duration: {duration} minutes\n\n"
             f"Starts: {start_time} (UTC)\n\n"
             f"Sender: {eas_fields.get('sender', 'N/A')}\n\n"
-            f"Raw: {eas_fields.get('raw_header', '')}"
         )
 
         footer = (
-            "\n\nThis message was sent using wbor-endec\n"
+            "\n\n(This is an automated message)\n"
             "[WBOR-91-1-FM/wbor-endec]\n----------"
         )
         body = f"{full_message}{footer}"
