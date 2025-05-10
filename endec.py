@@ -88,6 +88,8 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
         root_logger.addHandler(handler)
 
     logging.getLogger("pika").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -769,7 +771,7 @@ def parse_eas(header: str) -> Dict[str, Any]:
             + timedelta(days=jjj - 1, hours=hh, minutes=mm)
         )
         .astimezone(ZoneInfo("America/New_York"))
-        .strftime("%Y-%m-%d %H:%M")
+        .isoformat(timespec="minutes")
     )
 
     # Get human-readable location names, stored alongside the raw codes
@@ -1078,7 +1080,7 @@ def dispatch(
             "message_text": msg,
             "eas_data": eas_fields,
         }
-        if not rabbitmq_publisher.publish(RABBITMQ_ROUTING_KEY, rabbitmq_payload):
+        if not rabbitmq_publisher.publish(rabbitmq_payload, RABBITMQ_ROUTING_KEY):
             LOGGER.error("Failed to publish message to RabbitMQ.")
     elif rabbitmq_publisher and cfg.rabbitmq_amqp_url and not eas_fields:
         LOGGER.warning("No EAS fields, publishing simplified message to RabbitMQ.")
@@ -1088,7 +1090,7 @@ def dispatch(
             "message_text": msg,
             "eas_data": {"event_name": "Plain Text Message", "raw_header": "N/A"},
         }
-        rabbitmq_publisher.publish(RABBITMQ_ROUTING_KEY, rabbitmq_payload)
+        rabbitmq_publisher.publish(rabbitmq_payload, RABBITMQ_ROUTING_KEY)
 
 
 # ---------------------------------------------------------------------------
