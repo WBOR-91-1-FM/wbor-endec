@@ -749,15 +749,18 @@ def parse_eas(header: str) -> Dict[str, Any]:
     jjj, hh, mm = int(g["ts"][:3]), int(g["ts"][3:5]), int(g["ts"][5:])
 
     now_utc_aware = datetime.now(timezone.utc)
+    year = now_utc_aware.year
 
-    y_start = datetime(now_utc_aware.year, 1, 1, tzinfo=timezone.utc)
+    y_start = datetime(year, 1, 1, tzinfo=timezone.utc)
     start_utc = (y_start + timedelta(days=jjj - 1, hours=hh, minutes=mm)).strftime(
         "%Y-%m-%dT%H:%MZ"
     )
 
     timestamp_et = (
-        datetime.strptime(g["ts"], "%j%H%M")
-        .replace(tzinfo=timezone.utc)
+        (
+            datetime(year, 1, 1, tzinfo=timezone.utc)
+            + timedelta(days=jjj - 1, hours=hh, minutes=mm)
+        )
         .astimezone(ZoneInfo("America/New_York"))
         .strftime("%Y-%m-%d %H:%M")
     )

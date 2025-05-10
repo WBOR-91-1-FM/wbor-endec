@@ -53,8 +53,10 @@ sudo chmod 0644 /etc/wbor-endec/config.json
 ```json
 {
   "webhooks": ["https://example.com/webhook1", "https://example.com/webhook2"],
+  "discord_urls": ["https://discord.com/api/webhooks/...", "..."],
   "groupme_bot_ids": ["abcd1234", "efgh5678"],
-  "discord_urls": ["https://discord.com/api/webhooks/...", "..."]
+  "rabbitmq_amqp_url": "amqp://guest:guest@localhost:5672",
+  "rabbbitmq_exchange_name": "wbor-endec",  // Optional, defaults to "wbor-endec"
 }
 ```
 
