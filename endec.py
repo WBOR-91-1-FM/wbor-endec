@@ -87,6 +87,8 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
     for handler in handlers:
         root_logger.addHandler(handler)
 
+    logging.getLogger("pika").setLevel(logging.WARNING)
+
 
 # ---------------------------------------------------------------------------
 # RabbitMQ Publisher
