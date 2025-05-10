@@ -11,8 +11,8 @@ Authors:
 - Evan Vander Stoep <@evanvs>
 - Mason Daugherty <@mdrxy>
 
-Version: 3.0.0
-Last Modified: 2025-05-09
+Version: 4.0.0
+Last Modified: 2025-05-10
 
 Changelog:
     - 1.0.0 (????): Initial release <@evanvs>
@@ -21,7 +21,8 @@ Changelog:
         support for GroupMe <@mdrxy>
     - 2.1.2 (2025-05-08): Refactor
     - 3.0.0 (2025-05-09): Secure refactor
-"""
+    - 4.0.0 (2025-05-10): Added RabbitMQ support and some refactors
+"""  # pylint: disable=too-many-lines
 
 from __future__ import annotations
 
@@ -32,11 +33,12 @@ import os
 import re
 import stat
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+import pika
 import requests
 from serial import Serial
 from serial.serialutil import SerialException
@@ -52,9 +54,8 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
     """
     Configure root logger.
     """
-
     handlers: List[logging.Handler] = []
-    fmt = "%(asctime)s - %(levelname)s - %(message)s"
+    fmt = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 
     if logfile:
         try:
@@ -62,13 +63,242 @@ def _lazy_setup_logging(debug: bool, logfile: str | None) -> None:
             file_handler.setFormatter(logging.Formatter(fmt))
             handlers.append(file_handler)
         except OSError:
-            # Fall back to stderr only
+            LOGGER.warning("Could not open logfile %s, falling back to stderr", logfile)
             pass
 
-    handlers.append(logging.StreamHandler())
-    logging.basicConfig(
-        level=logging.DEBUG if debug else logging.INFO, handlers=handlers, format=fmt
-    )
+    # Stream handler for console output
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter(fmt))
+    handlers.append(stream_handler)
+
+    # Remove existing handlers to avoid duplication if called multiple times
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    # Configure the root logger with stream and file handlers
+    root_logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    for handler in handlers:
+        root_logger.addHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# RabbitMQ Publisher
+# ---------------------------------------------------------------------------
+
+
+class RabbitMQPublisher:
+    """
+    A RabbitMQ publisher class that handles connection, channel
+    management, exchange declaration, and message publishing with
+    retries and publisher confirms.
+    """
+
+    def __init__(self, amqp_url: str, exchange_name: str, exchange_type: str = "topic"):
+        self.amqp_url = amqp_url
+        self.exchange_name = exchange_name
+        self.exchange_type = exchange_type
+        self._connection: Optional[pika.BlockingConnection] = None
+        self._channel: Optional[pika.channel.Channel] = None
+        self.logger = logging.getLogger(__name__ + ".RabbitMQPublisher")
+        self._connect()
+
+    def _connect(self) -> None:
+        """
+        Handle connection to RabbitMQ server and channel declaration.
+        """
+        if self._connection and self._connection.is_open:
+            # Already connected
+            return
+        try:
+            self.logger.info(
+                "Attempting to connect to RabbitMQ server at %s",
+                self.amqp_url.split("@")[-1],
+            )
+            self._connection = pika.BlockingConnection(
+                pika.URLParameters(self.amqp_url)
+            )
+            self._channel = self._connection.channel()
+            self._channel.exchange_declare(
+                exchange=self.exchange_name,
+                exchange_type=self.exchange_type,
+                durable=True,
+            )
+
+            # Enable publisher confirms, which allows us to confirm that
+            # messages have been successfully published to the exchange
+            # and not just simply sent to the RabbitMQ server.
+            self._channel.confirm_delivery()
+            self.logger.info(
+                "Successfully connected to RabbitMQ and declared exchange `%s` "
+                "(type: %s)",
+                self.exchange_name,
+                self.exchange_type,
+            )
+        except pika.exceptions.AMQPConnectionError as e:
+            self.logger.error("Failed to connect to RabbitMQ: %s", e)
+            self._connection = None
+            self._channel = None
+            raise
+
+    def _ensure_connected(self) -> None:
+        """
+        Check if the connection and channel are open. If not, attempt to
+        reconnect.
+        """
+        if (
+            not self._connection
+            or self._connection.is_closed
+            or not self._channel
+            or self._channel.is_closed
+        ):
+            self.logger.warning(
+                "RabbitMQ connection/channel is closed or not established. Reconnecting..."
+            )
+            self._connect()
+
+    def ensure_connection(self) -> None:
+        """
+        Public method to ensure RabbitMQ connection is active.
+        """
+        self._ensure_connected()
+
+    def publish(
+        self,
+        message_body: Dict[str, Any],
+        routing_key: str = "notification.wbor-endec",
+        retry_attempts: int = 3,
+        retry_delay_seconds: int = 5,
+    ) -> bool:
+        """
+        Publish a message to the RabbitMQ exchange with the specified
+        routing key.
+
+        Parameters:
+        - message_body (Dict[str, Any]): The message body to publish.
+        - routing_key (str): The routing key to use for the message.
+        - retry_attempts (int): Number of retry attempts on failure.
+        - retry_delay_seconds (int): Delay between retry attempts in
+            seconds.
+
+        Returns:
+        - bool: True if the message was published successfully, False
+            otherwise.
+        """
+        self._ensure_connected()
+        if (
+            not self._channel
+        ):  # Should not happen if _ensure_connected works, but as a safeguard
+            self.logger.error("Cannot publish, channel is not available.")
+            return False
+
+        message_body_str = json.dumps(message_body)
+
+        for attempt in range(retry_attempts):
+            try:
+                if self._channel.basic_publish(
+                    exchange=self.exchange_name,
+                    routing_key=routing_key,
+                    body=message_body_str,
+                    properties=pika.BasicProperties(
+                        delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
+                        content_type="application/json",
+                    ),
+                    mandatory=True,  # Important for unroutable messages
+                ):
+                    self.logger.info(
+                        "Successfully published and confirmed message to "
+                        "exchange `%s` with routing key `%s`",
+                        self.exchange_name,
+                        routing_key,
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        "Message to exchange `%s` with routing key `%s` was "
+                        "NACKed or not confirmed (attempt %d/%d).",
+                        self.exchange_name,
+                        routing_key,
+                        attempt + 1,
+                        retry_attempts,
+                    )
+                    # Handle NACK: could retry, log, or send to DLX.
+
+            except pika.exceptions.UnroutableError:
+                self.logger.error(
+                    "Message to exchange `%s` with routing key `%s` was unroutable. "
+                    "Ensure a queue is bound with this routing key or the exchange exists "
+                    "correctly.",
+                    self.exchange_name,
+                    routing_key,
+                )
+                return False  # Do not retry unroutable messages automatically
+            except (
+                pika.exceptions.AMQPConnectionError,
+                pika.exceptions.AMQPChannelError,
+            ) as e:
+                self.logger.error(
+                    "Connection/Channel error during publish (attempt %d/%d): %s",
+                    attempt + 1,
+                    retry_attempts,
+                    e,
+                )
+                if attempt < retry_attempts - 1:
+                    time.sleep(
+                        retry_delay_seconds * (attempt + 1)
+                    )  # Exponential backoff might be better
+                    self.logger.info(
+                        "Retrying publish in %d seconds...", retry_delay_seconds
+                    )
+                    self._connect()  # Attempt to reconnect
+                else:
+                    self.logger.error(
+                        "Failed to publish message after %d attempts.", retry_attempts
+                    )
+                    return False  # Indicate failure
+            except Exception as e:  # pylint: disable=broad-except
+                self.logger.error(
+                    "An unexpected error occurred during publish (attempt %d/%d): %s",
+                    attempt + 1,
+                    retry_attempts,
+                    e,
+                )
+                # Fall through to retry or fail after attempts
+
+            if attempt < retry_attempts - 1:
+                self.logger.info(
+                    "Retrying publish in %d seconds...", retry_delay_seconds
+                )
+                time.sleep(retry_delay_seconds)
+            else:
+                self.logger.error(
+                    "Failed to publish message to exchange `%s` with routing key `%s` after %d "
+                    "attempts.",
+                    self.exchange_name,
+                    routing_key,
+                    retry_attempts,
+                )
+                return False
+        return False
+
+    def close(self) -> None:
+        """
+        Close the RabbitMQ connection and channel.
+        """
+        try:
+            if self._channel and self._channel.is_open:
+                self._channel.close()
+                self.logger.info("RabbitMQ channel closed.")
+        except Exception as e:  # pylint: disable=broad-except
+            self.logger.error("Error closing RabbitMQ channel: %s", e)
+        try:
+            if self._connection and self._connection.is_open:
+                self._connection.close()
+                self.logger.info("RabbitMQ connection closed.")
+        except Exception as e:  # pylint: disable=broad-except
+            self.logger.error("Error closing RabbitMQ connection: %s", e)
+        self._channel = None
+        self._connection = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,11 +358,13 @@ def _validate_url(u: str) -> str:
     """
     p = urlparse(u)
     if p.scheme not in ("http", "https") or not p.netloc:
-        raise argparse.ArgumentTypeError(f"Invalid URL: {u!r}")
+        # Allow AMQP/AMQPS for RabbitMQ
+        if p.scheme not in ("amqp", "amqps"):
+            raise argparse.ArgumentTypeError(f"Invalid URL: `{u!r}`")
     return u
 
 
-class Settings:  # pylint: disable=too-few-public-methods
+class Settings:  # pylint: disable=too-few-public-methods, too-many-instance-attributes
     """
     Runtime configuration merged from config + secrets.
     """
@@ -141,6 +373,9 @@ class Settings:  # pylint: disable=too-few-public-methods
         """
         Initialize the Settings object with public and secret
         configurations.
+
+        Defaults to `/dev/ttyUSB0` for the serial port and `False` for
+        debug mode if not specified.
 
         Parameters:
         - public_cfg (Dict[str, Any]): The public configuration
@@ -164,8 +399,21 @@ class Settings:  # pylint: disable=too-few-public-methods
 
         self.groupme_bot_ids: List[str] = secrets.get("groupme_bot_ids", [])
 
-        if not (self.webhooks or self.groupme_bot_ids or self.discord_urls):
-            raise RuntimeError("No destinations configured - aborting")
+        self.rabbitmq_amqp_url: Optional[str] = secrets.get("rabbitmq_amqp_url")
+        if self.rabbitmq_amqp_url:
+            _validate_url(self.rabbitmq_amqp_url)
+        self.rabbitmq_exchange_name: str = secrets.get("rabbitmq_exchange_name")
+
+        if not (
+            self.webhooks
+            or self.groupme_bot_ids
+            or self.discord_urls
+            or self.rabbitmq_amqp_url
+        ):
+            raise RuntimeError(
+                "No destinations configured (webhooks, groupme, discord, or "
+                "rabbitmq) - aborting"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +432,14 @@ def _load_location_map() -> tuple[dict[str, str], dict[str, str]]:
     loc_map: dict[str, str] = {}
     state_map: dict[str, str] = {}
 
+    # Assumes `national_county.tx`t in the same directory as the script
     fn = Path(__file__).parent / "national_county.txt"
+    if not fn.exists():
+        LOGGER.warning(
+            f"Location map file not found: {fn}. Location lookups will fail."
+        )
+        return loc_map, state_map
+
     with fn.open(encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split(",")
@@ -220,11 +475,14 @@ def _lookup_location(code: str) -> str:
     Returns:
     - str: The human-readable location name, or "Unknown" if not found.
     """
+    if not code or len(code) != 6:
+        return "Invalid Code"
     ssccc = code[1:]  # Drop leading placeholder
     st, co = ssccc[:2], ssccc[2:]
     if co == "000":
-        return _STATE_MAP.get(st, "Unknown")
-    return _LOC_MAP.get(ssccc, "Unknown")
+        return _STATE_MAP.get(st, "Unknown State")
+
+    return _LOC_MAP.get(ssccc, "Unknown County/Area")
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +672,7 @@ HEADER_RE = re.compile(
 )
 
 
-def parse_eas(header: str) -> Dict[str, str]:
+def parse_eas(header: str) -> Dict[str, Any]:
     """
     Parse the EAS header and return a dictionary with the parsed fields.
     The input header format is expected to be:
@@ -422,10 +680,10 @@ def parse_eas(header: str) -> Dict[str, str]:
     ZCZC-ORG-EEE-PSSCCC+TTTT-JJJHHMM-LLLLLLLL-
 
     Every field is fixed-width, made of 7-bit ASCII, separated by the
-    literal dash ( - ), with a single plus ( + ) introducing the
+    literal dash (`-`), with a single plus (`+`) introducing the
     valid-time field.
 
-    where:
+    Components:
     - ZCZC: EAS header start (fixed)
     - ORG: Originator code (EAS, CIV, WXR, PEP) (A-Z, 3 chars)
     - EEE: Event code (e.g. TOR, RWT, EAN. 80+ defined) (A-Z, 3 chars)
@@ -447,7 +705,7 @@ def parse_eas(header: str) -> Dict[str, str]:
     - header (str): The EAS header string to parse.
 
     Returns:
-    - Dict[str, str]: A dictionary containing the parsed fields:
+    - Dict[str, Any]: A dictionary containing the parsed fields:
         - org: Originator code
         - event: Event code
         - locs: List of location codes
@@ -474,9 +732,10 @@ def parse_eas(header: str) -> Dict[str, str]:
 
     # JJJHHMM to ISO UTC (current year)
     jjj, hh, mm = int(g["ts"][:3]), int(g["ts"][3:5]), int(g["ts"][5:])
-    y_start = datetime.utcnow().replace(
-        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
-    )
+
+    now_utc_aware = datetime.now(timezone.utc)
+
+    y_start = datetime(now_utc_aware.year, 1, 1, tzinfo=timezone.utc)
     start_utc = (y_start + timedelta(days=jjj - 1, hours=hh, minutes=mm)).strftime(
         "%Y-%m-%dT%H:%MZ"
     )
@@ -488,8 +747,8 @@ def parse_eas(header: str) -> Dict[str, str]:
     return {
         "org": g["org"],
         "event": g["event"],
-        "locs": locs,
-        "raw_locs": raw_locs,
+        "locs": locs,  # Human-readable location names
+        "raw_locs": raw_locs,  # Raw location codes
         "duration_minutes": duration_minutes,
         "duration_raw": g["dur"],
         "start_utc": start_utc,
@@ -520,7 +779,10 @@ class Webhook:  # pylint: disable=too-few-public-methods
         - url (str): The webhook URL to send POST requests to.
         """
         self.url = url
-        self.headers = {"Content-Type": "application/json"}
+        self.headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "WBOR-91-1-FM/wbor-endec",
+        }
 
     def post(self, payload: Dict[str, Any]) -> None:
         """
@@ -528,7 +790,7 @@ class Webhook:  # pylint: disable=too-few-public-methods
 
         Parameters:
         - payload (Dict[str, Any]): The payload to send in the POST
-            equest.
+            request.
 
         Raises:
         - requests.RequestException: If the POST request fails.
@@ -539,6 +801,9 @@ class Webhook:  # pylint: disable=too-few-public-methods
                 self.url, headers=self.headers, json=payload, timeout=10
             )
             resp.raise_for_status()
+            LOGGER.debug(
+                "Webhook POST to `%s` successful, status %s", self.url, resp.status_code
+            )
         except requests.RequestException as exc:
             LOGGER.warning("Webhook POST to `%s` failed: %s", self.url, exc)
 
@@ -557,14 +822,15 @@ class Discord:  # pylint: disable=too-few-public-methods
             messages to.
         """
         self.urls = urls
+        self.webhook_clients = [Webhook(url) for url in urls]
 
-    def post(self, content: str, eas_fields: Dict[str, str]) -> None:
+    def post(self, content: str, eas_fields: Dict[str, Any]) -> None:
         """
         Send a message to Discord with the given content and EAS fields.
 
         Parameters:
         - content (str): The message content to send.
-        - eas_fields (Dict[str, str]): A dictionary containing EAS
+        - eas_fields (Dict[str, Any]): A dictionary containing EAS
             fields to include in the message as embedded fields.
         """
         # Determine color based on event code
@@ -580,50 +846,74 @@ class Discord:  # pylint: disable=too-few-public-methods
         elif code in FUTURE_CODES:
             cat = "future"
         else:
-            cat = "emergency"
-        color = CATEGORY_COLORS.get(cat, 0x95A5A6)
+            cat = "emergency"  # Default for unknown codes
+        color = CATEGORY_COLORS.get(cat, CATEGORY_COLORS["emergency"])
+
+        embed_fields = [
+            # Originator + event code
+            {
+                "name": "Event",
+                "value": (
+                    f"{eas_fields.get('event_name', 'N/A')} ({eas_fields.get('event', 'N/A')})"
+                ),
+                "inline": True,
+            },
+            # Duration in minutes
+            {
+                "name": "Duration (min)",
+                "value": str(eas_fields.get("duration_minutes", "N/A")),
+                "inline": True,
+            },
+            # Start timestamp in UTC
+            {
+                "name": "Start (UTC)",
+                "value": eas_fields.get("start_utc", "N/A"),
+                "inline": True,
+            },
+            # Sending station's ID
+            {
+                "name": "Sender",
+                "value": eas_fields.get("sender", "N/A"),
+                "inline": True,
+            },
+            # Originator
+            {
+                "name": "Originator",
+                "value": eas_fields.get("org", "N/A"),
+                "inline": True,
+            },
+            # Timestamp Raw
+            {
+                "name": "Timestamp (Raw)",
+                "value": eas_fields.get("timestamp_raw", "N/A"),
+                "inline": True,
+            },
+            # All location codes
+            {
+                "name": "Locations",
+                "value": ", ".join(eas_fields.get("locs", [])) or "N/A",
+                "inline": False,  # Best on its own line if long
+            },
+            {
+                "name": "Raw Header",
+                "value": f"```{eas_fields.get('raw_header', 'N/A')}```",
+                "inline": False,
+            },
+        ]
 
         embed = {
-            "title": f"{eas_fields['event_name']}",
-            "description": content,
+            "title": f"EAS Alert: {eas_fields.get('event_name', 'Unknown Event')}",
+            "description": content if content else "See details in fields.",
             "color": color,
-            "fields": [
-                # Originator + event code
-                {
-                    "name": "Event",
-                    "value": f"{eas_fields['event_name']} ({eas_fields['event']})",
-                    "inline": True,
-                },
-                # Duration in minutes
-                {
-                    "name": "Duration (min)",
-                    "value": str(eas_fields.get("duration_minutes", "Not found")),
-                    "inline": True,
-                },
-                # Start timestamp in UTC
-                {
-                    "name": "Start (UTC)",
-                    "value": eas_fields.get("start_utc", "Not found"),
-                    "inline": True,
-                },
-                # Sending station's ID
-                {
-                    "name": "Sender",
-                    "value": eas_fields.get("sender", "Not found"),
-                    "inline": True,
-                },
-                # All location codes
-                {
-                    "name": "Locations",
-                    "value": ", ".join(eas_fields.get("locs", [])) or "Not found",
-                    "inline": False,
-                },
-            ],
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "fields": embed_fields,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "footer": {"text": "Powered by WBOR-91-1-FM/wbor-endec"},
         }
-        payload = {"embeds": [embed]}
-        for u in self.urls:
-            Webhook(u).post(payload)
+        payload = {"embeds": [embed], "username": "WBOR ENDEC Alerter"}
+
+        for client in self.webhook_clients:
+            LOGGER.info("POST to Discord webhook `%s`", client.url)
+            client.post(payload)
 
 
 class GroupMe:  # pylint: disable=too-few-public-methods
@@ -641,55 +931,131 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         """
         self.bot_ids = bot_ids
         self.url = "https://api.groupme.com/v3/bots/post"
+        self.webhook_client = Webhook(self.url)
 
-    def post(self, message: str) -> None:
+    def post(  # pylint: disable=too-many-locals
+        self, message: str, eas_fields: Dict[str, Any]
+    ) -> None:
         """
         Send a message to GroupMe with the given content via a Bot ID.
 
         Parameters:
         - message (str): The message content to send.
+        - eas_fields (Dict[str, Any]): A dictionary containing EAS
+            fields to include in the message.
         """
+        event_name = eas_fields.get("event_name", "Unknown Event")
+        locs_str = ", ".join(eas_fields.get("locs", [])) or "N/A"
+        duration = eas_fields.get("duration_minutes", "N/A")
+        start_time = eas_fields.get("start_utc", "N/A")
+
+        full_message = (
+            f"EAS Alert: {event_name}\n\n"
+            f"Message: {message}\n\n"
+            f"Locations: {locs_str}\n\n"
+            f"Duration: {duration} minutes\n\n"
+            f"Starts: {start_time} (UTC)\n\n"
+            f"Sender: {eas_fields.get('sender', 'N/A')}\n\n"
+            f"Raw: {eas_fields.get('raw_header', '')}"
+        )
+
         footer = (
-            "\n\nThis message was sent using wbor-endec V2\n"
+            "\n\nThis message was sent using wbor-endec\n"
             "[WBOR-91-1-FM/wbor-endec]\n----------"
         )
-        body = f"{message}{footer}"
+        body = f"{full_message}{footer}"
 
-        # Split body into 500 character segments (max length for GroupMe messages)
-        segments = [body[i : i + 500] for i in range(0, len(body), 500)]
-        for segment in segments:
+        # Split body into 500 character segments (max GroupMe length)
+        max_len = 450  # Leave some room
+        segments = [body[i : i + max_len] for i in range(0, len(body), max_len)]
+
+        for segment_idx, segment in enumerate(segments):
             for bot_id in self.bot_ids:
                 payload = {"bot_id": bot_id, "text": segment}
-                Webhook(self.url).post(payload)
+                LOGGER.info(
+                    "POST to GroupMe Bot ID `%s` (segment %d/%d)",
+                    bot_id,
+                    segment_idx + 1,
+                    len(segments),
+                )
+                self.webhook_client.post(payload)
 
 
 # ---------------------------------------------------------------------------
 # Message dispatch
 # ---------------------------------------------------------------------------
 
+RABBITMQ_ROUTING_KEY = "notification.wbor-endec"
 
-def dispatch(msg: str, eas_fields: Dict[str, str], cfg: Settings) -> None:
+
+def dispatch(
+    msg: str,
+    eas_fields: Dict[str, Any],
+    cfg: Settings,
+    rabbitmq_publisher: Optional[RabbitMQPublisher] = None,
+) -> None:
     """
     Dispatch the message to the configured destinations.
 
     Parameters:
     - msg (str): The message content to send.
-    - eas_fields (Dict[str, str]): A dictionary containing EAS fields to
+    - eas_fields (Dict[str, Any]): A dictionary containing EAS fields to
         include in the message.
     - cfg (Settings): The runtime configuration object containing
         destination information.
+    - rabbitmq_publisher (Optional[RabbitMQPublisher]): Instance for
+        RabbitMQ.
     """
-    payload = {"message": msg, "eas": eas_fields} if eas_fields else {"message": msg}
-    for url in cfg.webhooks:
-        Webhook(url).post(payload)
+    # Generic Webhooks
+    if cfg.webhooks:
+        # Send the raw message and full EAS fields separately
+        webhook_payload = {"message_text": msg, "eas_data": eas_fields}
+        for url in cfg.webhooks:
+            Webhook(url).post(webhook_payload)
 
-    # Multi-destination is handled by the Discord and GroupMe classes
-    # so we don't need to loop through them here.
-    if cfg.discord_urls:
+    # Discord
+    if cfg.discord_urls and eas_fields:
         Discord(cfg.discord_urls).post(msg, eas_fields)
+    elif cfg.discord_urls:  # Fallback if no `eas_fields`
+        LOGGER.warning("No EAS fields, sending plain message to Discord URLs.")
+        Discord(cfg.discord_urls).post(
+            f"Plain message: {msg}", {"event_name": "Unknown Event"}
+        )
 
-    if cfg.groupme_bot_ids:
-        GroupMe(cfg.groupme_bot_ids).post(msg)
+    # GroupMe
+    if cfg.groupme_bot_ids and eas_fields:
+        GroupMe(cfg.groupme_bot_ids).post(msg, eas_fields)
+    elif cfg.groupme_bot_ids:  # Fallback if no `eas_fields`
+        LOGGER.warning("No EAS fields, sending plain message to GroupMe bot IDs.")
+        GroupMe(cfg.groupme_bot_ids).post(
+            f"Plain message: {msg}", {"event_name": "Unknown Event"}
+        )
+
+    # RabbitMQ
+    if rabbitmq_publisher and cfg.rabbitmq_amqp_url and eas_fields:
+        LOGGER.info(
+            "Publishing to RabbitMQ with routing key `%s`", RABBITMQ_ROUTING_KEY
+        )
+
+        processed_timestamp_utc = datetime.now(timezone.utc).isoformat()
+
+        rabbitmq_payload = {
+            "source": "wbor-endec",
+            "timestamp_processed_utc": processed_timestamp_utc,
+            "message_text": msg,
+            "eas_data": eas_fields,
+        }
+        if not rabbitmq_publisher.publish(RABBITMQ_ROUTING_KEY, rabbitmq_payload):
+            LOGGER.error("Failed to publish message to RabbitMQ.")
+    elif rabbitmq_publisher and cfg.rabbitmq_amqp_url and not eas_fields:
+        LOGGER.warning("No EAS fields, publishing simplified message to RabbitMQ.")
+        rabbitmq_payload = {
+            "source": "wbor-endec",
+            "timestamp_processed_utc": processed_timestamp_utc,
+            "message_text": msg,
+            "eas_data": {"event_name": "Plain Text Message", "raw_header": "N/A"},
+        }
+        rabbitmq_publisher.publish(RABBITMQ_ROUTING_KEY, rabbitmq_payload)
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +1063,9 @@ def dispatch(msg: str, eas_fields: Dict[str, str], cfg: Settings) -> None:
 # ---------------------------------------------------------------------------
 
 
-def process_serial(cfg: Settings) -> None:
+def process_serial(
+    cfg: Settings, rabbitmq_publisher: Optional[RabbitMQPublisher]
+) -> None:
     """
     Main event loop for processing serial input.
     This function continuously reads from the serial port and processes
@@ -706,10 +1074,8 @@ def process_serial(cfg: Settings) -> None:
     Parameters:
     - cfg (Settings): The runtime configuration object containing serial
         port information.
-
-    Raises:
-    - SerialException: If there is an error with the serial port.
-    - requests.RequestException: If there is an error with the webhook
+    - rabbitmq_publisher (Optional[RabbitMQPublisher]): Instance for
+        RabbitMQ publishing.
     """
 
     def transform_and_send(lines: List[str]) -> None:
@@ -721,60 +1087,161 @@ def process_serial(cfg: Settings) -> None:
         - lines (List[str]): The list of lines read from the serial
             port.
         """
-        eas_fields: Dict[str, str] = {}
-        header = None
-        # Strip final header line
-        if lines and lines[-1].startswith("ZCZC"):
-            header = lines.pop()
-            try:
-                eas_fields = parse_eas(header)
-            except ValueError:
-                LOGGER.warning("Skipping malformed EAS header: %r", header)
+        eas_fields: Dict[str, Any] = {}
+        header_line: Optional[str] = None  # Potential EAS header line
 
-        message = " ".join(lines)
-        dispatch(message, eas_fields, cfg)
+        # Clean up lines: strip whitespace, remove empty lines
+        cleaned_lines = [line.strip() for line in lines if line.strip()]
+        if not cleaned_lines:
+            LOGGER.debug("No content in buffer to send after cleaning.")
+            return
+
+        # Attempt to find, parse EAS header
+        if cleaned_lines and cleaned_lines[-1].startswith("ZCZC"):
+            header_line = cleaned_lines.pop()
+            try:
+                eas_fields = parse_eas(header_line)
+                LOGGER.info(
+                    "Parsed EAS Header: %s (%s)",
+                    eas_fields.get("event_name"),
+                    eas_fields.get("event"),
+                )
+            except ValueError:
+                LOGGER.warning(
+                    "Malformed EAS header found: %r. Treating as part of message.",
+                    header_line,
+                )
+                cleaned_lines.append(header_line)  # Add it back if not parsable
+                header_line = None  # Clear it as it wasn't a valid header
+
+        message = " ".join(cleaned_lines)
+        if not message and not eas_fields:
+            LOGGER.debug("No message content or EAS fields to dispatch.")
+            return
+
+        if (
+            not message and eas_fields
+        ):  # If only an EAS header was sent (e.g. RWT with no text body)
+            # This shouldn't happen
+            message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
+
+        LOGGER.info(
+            "Dispatching message. EAS Event: %s. Message snippet: '%s...'",
+            eas_fields.get("event_name", "N/A") if eas_fields else "No EAS Header",
+            message[:100],
+        )
+        dispatch(message, eas_fields, cfg, rabbitmq_publisher)
 
     while True:
-        ser = None
+        ser: Optional[Serial] = None
         try:
-            ser = Serial(cfg.port, baudrate=9600, bytesize=8, stopbits=1)
-            LOGGER.debug("Serial port `%s` opened", cfg.port)
+            LOGGER.debug("Opening serial port `%s` at 9600 baud.", cfg.port)
+            ser = Serial(cfg.port, baudrate=9600, bytesize=8, stopbits=1, timeout=1)
+            LOGGER.info("Serial port `%s` opened.", cfg.port)
+
+            buffer: List[str] = []
+            in_message_block = False
 
             while ser.isOpen():
-                LOGGER.debug("Entering read loop on `%s`", cfg.port)
+                try:
+                    raw_bytes = ser.readline()
+                    if not raw_bytes:  # Timeout occurred, loop again
+                        if (
+                            in_message_block
+                        ):  # If we were in a block, maybe it ended due to timeout
+                            LOGGER.debug(
+                                "Serial readline timed out while in message block. Processing "
+                                "buffered lines."
+                            )
+                            if buffer:
+                                transform_and_send(list(buffer))  # Send copy
+                                buffer.clear()
+                            in_message_block = False
+                        continue
 
-                raw = ser.readline()
-                LOGGER.debug("Raw input: %r", raw)
-                line = raw.decode("utf-8", errors="ignore")
+                    line = raw_bytes.decode("utf-8", errors="ignore").strip()
+                    LOGGER.debug("Raw serial line: %r", line)
 
-                if "<ENDECSTART>" in line:
-                    LOGGER.debug("Found <ENDECSTART> in line: %r", line)
+                    if "<ENDECSTART>" in line:
+                        LOGGER.debug("Found <ENDECSTART>. Starting new message block.")
+                        if (
+                            buffer
+                        ):  # Process any previous dangling buffer lines if a new START appears
+                            LOGGER.warning(
+                                "New <ENDECSTART> found with existing buffer. Processing old "
+                                "buffer first."
+                            )
+                            transform_and_send(list(buffer))
+                        buffer.clear()
+                        in_message_block = True
 
-                if "<ENDECSTART>" not in line:
-                    continue
+                        # Remove the tag itself if it's the only thing on the line
+                        line_content_after_start = line.split("<ENDECSTART>", 1)[
+                            -1
+                        ].strip()
+                        if line_content_after_start:
+                            buffer.append(line_content_after_start)
+                        continue  # Move to next readline
 
-                # Read until <ENDECEND> is found
-                buffer: List[str] = []
-                for raw2 in iter(ser.readline, b""):
-                    chunk = raw2.decode("utf-8", errors="ignore")
-                    if "<ENDECEND>" in chunk:
-                        break
-                    buffer.append(chunk.strip())
+                    if in_message_block:
+                        if "<ENDECEND>" in line:
+                            LOGGER.debug("Found <ENDECEND>. Ending message block.")
+                            # Content before <ENDECEND> on the same line
+                            line_content_before_end = line.split("<ENDECEND>", 1)[
+                                0
+                            ].strip()
+                            if line_content_before_end:
+                                buffer.append(line_content_before_end)
 
-                # Process the buffer
-                if buffer:
-                    LOGGER.debug(
-                        "Collected %d lines for one EAS payload: %s",
-                        len(buffer),
-                        buffer,
+                            if buffer:
+                                transform_and_send(list(buffer))
+                            buffer.clear()
+                            in_message_block = False
+                        else:
+                            if line:  # Add non-empty lines to buffer
+                                buffer.append(line)
+                    # else: Lines outside a block are ignored unless it's a start tag
+
+                except SerialException as read_exc:
+                    LOGGER.error(
+                        "Error during serial read on `%s`: %s", cfg.port, read_exc
                     )
-                    transform_and_send(buffer)
-        except (SerialException, requests.RequestException) as exc:
-            LOGGER.warning("Serial loop error: %s", exc)
+                    # Might indicate a disconnected device, break to outer loop to retry connection
+                    break
+                except UnicodeDecodeError as decode_exc:
+                    LOGGER.warning(
+                        "Unicode decode error for raw bytes: %r - %s",
+                        raw_bytes,
+                        decode_exc,
+                    )
+        except SerialException as conn_exc:
+            LOGGER.error(
+                "Failed to open or communicate with serial port `%s`: %s",
+                cfg.port,
+                conn_exc,
+            )
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.critical(
+                "Unexpected error in serial processing loop: %s", e, exc_info=True
+            )
         finally:
             if ser and ser.isOpen():
                 ser.close()
-                LOGGER.debug("Serial port `%s` closed", cfg.port)
+                rabbitmq_publisher.ensure_connection()
+
+            if (
+                rabbitmq_publisher
+            ):  # Check connection periodically if RabbitMQ is enabled
+                try:
+                    rabbitmq_publisher.ensure_connection()
+                except Exception as rq_conn_err:  # pylint: disable=broad-except
+                    LOGGER.error(
+                        "Periodic RabbitMQ connection check failed: %s", rq_conn_err
+                    )
+
+            LOGGER.info(
+                "Waiting 5 seconds before retrying serial connection or next check..."
+            )
             time.sleep(5)
 
 
@@ -785,32 +1252,98 @@ def process_serial(cfg: Settings) -> None:
 
 def main() -> None:  # pylint: disable=missing-function-docstring
     # Get public config
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="WBOR ENDEC Decoder & Publisher")
     parser.add_argument(
         "--config", required=True, type=Path, help="Path to public config JSON"
     )
     args = parser.parse_args()
-    public_cfg = _load_json(args.config)
 
-    # Get secrets
-    secret_path_str = os.getenv("SECRETS_PATH", "/etc/wbor-endec/secrets.json")
-    secret_path = Path(secret_path_str)
-    secrets = _load_json(secret_path)
+    public_cfg: Dict[str, Any] = {}
+    secrets: Dict[str, Any] = {}
+    cfg: Optional[Settings] = None
+    rabbitmq_publisher: Optional[RabbitMQPublisher] = None
 
-    # Merge configs
-    cfg = Settings(public_cfg, secrets)
+    try:
+        public_cfg = _load_json(args.config)
 
-    _lazy_setup_logging(cfg.debug, cfg.logfile)
+        # Get secrets, assuming they live at a fixed path
+        secret_path_str = os.getenv("SECRETS_PATH", "/etc/wbor-endec/secrets.json")
+        secret_path = Path(secret_path_str)
+        if not secret_path.exists():
+            LOGGER.error(
+                "Secrets file not found at %s. Please create it or set SECRETS_PATH.",
+                secret_path,
+            )
+            # No point in continuing if secrets can't be loaded for URLs etc.
+            # However, if RabbitMQ URL is also in public_cfg or env vars, this logic might change.
+            # For now, assuming `secrets.json` is critical.
+            # Try to setup basic logging even if we exit early.
+            _lazy_setup_logging(
+                public_cfg.get("debug", False), public_cfg.get("logfile")
+            )
+            return
+        secrets = _load_json(secret_path)
 
-    LOGGER.info("wbor-endec starting on `%s`", cfg.port)
+        cfg = Settings(public_cfg, secrets)
+        _lazy_setup_logging(cfg.debug, cfg.logfile)  # Setup logging using settings
+
+    except FileNotFoundError as e:
+        # Basic logging setup if config/secrets loading fails early
+        _lazy_setup_logging(public_cfg.get("debug", False), public_cfg.get("logfile"))
+        LOGGER.critical("Configuration file not found: %s. Exiting.", e)
+        return
+    except json.JSONDecodeError as e:
+        _lazy_setup_logging(public_cfg.get("debug", False), public_cfg.get("logfile"))
+        LOGGER.critical("Error decoding JSON configuration: %s. Exiting.", e)
+        return
+    except RuntimeError as e:  # For "No destinations configured"
+        _lazy_setup_logging(public_cfg.get("debug", False), public_cfg.get("logfile"))
+        LOGGER.critical("Configuration error: %s. Exiting.", e)
+        return
+    except Exception as e:  # pylint: disable=broad-except
+        _lazy_setup_logging(public_cfg.get("debug", False), public_cfg.get("logfile"))
+        LOGGER.critical(
+            "An unexpected error occurred during initialization: %s", e, exc_info=True
+        )
+        return
+
+    LOGGER.info("wbor-endec starting on serial port `%s`", cfg.port)
     LOGGER.info(
-        "Originally Written By: Evan Vander Stoep [@EvanVS]\n"
-        "Rewritten and modified by: Mason Daugherty [@mdrxy] for WBOR 91.1 FM "
-        "[https://wbor.org]\n\nLogger Started!\n"
+        "Authors: Evan Vander Stoep <@evanvs>, Mason Daugherty <@mdrxy>\n"
+        "Version: 4.0.0\n"
+        "WBOR 91.1 FM [https://wbor.org]\n"
     )
 
-    # Launch main loop
-    process_serial(cfg)
+    # Initialize RabbitMQ Publisher if configured
+    if cfg.rabbitmq_amqp_url:
+        try:
+            rabbitmq_publisher = RabbitMQPublisher(
+                amqp_url=cfg.rabbitmq_amqp_url, exchange_name=cfg.rabbitmq_exchange_name
+            )
+            LOGGER.info(
+                "RabbitMQ publisher initialized for exchange `%s`.",
+                cfg.rabbitmq_exchange_name,
+            )
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.error(
+                "Failed to initialize RabbitMQ publisher: `%s`. Will proceed without RabbitMQ.",
+                e,
+                exc_info=True,
+            )
+            rabbitmq_publisher = None  # Ensure it's None if init fails
+
+    try:
+        process_serial(cfg, rabbitmq_publisher)
+    except KeyboardInterrupt:
+        LOGGER.info("Keyboard interrupt received. Shutting down...")
+    except (
+        Exception  # pylint: disable=broad-exception-caught
+    ) as e:  # Catch unexpected errors from process_serial if they escape its own try/except
+        LOGGER.critical("Critical error in main processing: %s", e, exc_info=True)
+    finally:
+        LOGGER.info("wbor-endec shutting down...")
+        if rabbitmq_publisher:
+            rabbitmq_publisher.close()
 
 
 if __name__ == "__main__":
