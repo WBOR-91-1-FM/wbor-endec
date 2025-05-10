@@ -37,7 +37,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
+
+# Ensures compatibility with both Python 3.7 (via backports.zoneinfo) and newer
+# versions
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 import pika
 import requests
