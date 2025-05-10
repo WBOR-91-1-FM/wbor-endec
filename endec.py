@@ -755,6 +755,13 @@ def parse_eas(header: str) -> Dict[str, Any]:
         "%Y-%m-%dT%H:%MZ"
     )
 
+    timestamp_et = (
+        datetime.strptime(g["ts"], "%j%H%M")
+        .replace(tzinfo=timezone.utc)
+        .astimezone(ZoneInfo("America/New_York"))
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
     # Get human-readable location names, stored alongside the raw codes
     raw_locs = g["locs"].split("-")
     locs = [_lookup_location(loc) for loc in raw_locs]
@@ -769,6 +776,7 @@ def parse_eas(header: str) -> Dict[str, Any]:
         "duration_raw": g["dur"],
         "start_utc": start_utc,
         "timestamp_raw": g["ts"],
+        "timestamp_et": timestamp_et,
         "sender": sender,
         "event_name": EAS_EVENT_NAMES.get(g["event"], "Unknown"),
         "raw_header": header,
@@ -866,7 +874,7 @@ class Discord:  # pylint: disable=too-few-public-methods
         color = CATEGORY_COLORS.get(cat, CATEGORY_COLORS["emergency"])
 
         embed_fields = [
-            # Originator + event code
+            # Event name
             {
                 "name": "Event",
                 "value": (
@@ -895,20 +903,13 @@ class Discord:  # pylint: disable=too-few-public-methods
             # Originator
             {
                 "name": "Originator",
-                "value": eas_fields.get("org", "N/A"),
+                "value": f"{eas_fields.get("org", "N/A")} ({eas_fields.get("org_raw", "N/A")})",
                 "inline": True,
             },
             # Timestamp Raw
             {
                 "name": "Start (ET)",
-                "value": (
-                    datetime.strptime(
-                        eas_fields.get("timestamp_raw", "0010000"), "%j%H%M"
-                    )
-                    .replace(tzinfo=timezone.utc)
-                    .astimezone(ZoneInfo("America/New_York"))
-                    .strftime("%Y-%m-%d %H:%M")
-                ),
+                "value": eas_fields.get("timestamp_et", "N/A"),
                 "inline": True,
             },
             # All location codes
@@ -970,15 +971,15 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         event_name = eas_fields.get("event_name", "Unknown Event")
         locs_str = ", ".join(eas_fields.get("locs", [])) or "N/A"
         duration = eas_fields.get("duration_minutes", "N/A")
-        start_time = eas_fields.get("start_utc", "N/A")
+        start_time = eas_fields.get("timestamp_et", "N/A")
 
         full_message = (
             f"EAS Alert: {event_name}\n\n"
             f"Message: {message}\n\n"
             f"Locations: {locs_str}\n\n"
             f"Duration: {duration} minutes\n\n"
-            f"Starts: {start_time} (UTC)\n\n"
-            f"Sender: {eas_fields.get('sender', 'N/A')}\n\n"
+            f"Starts: {start_time} (ET)\n\n"
+            f"Sender: {eas_fields.get('sender', 'N/A')}"
         )
 
         footer = (

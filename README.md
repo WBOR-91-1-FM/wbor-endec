@@ -144,7 +144,6 @@ After updating (pulling from this repo), be sure to run:
 
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl restart wbor-endec.service
 ```
 
 ## Troubleshooting & Logs
