@@ -219,16 +219,15 @@ class RabbitMQPublisher:
                         routing_key,
                     )
                     return True
-                else:
-                    self.logger.warning(
-                        "Message to exchange `%s` with routing key `%s` was "
-                        "NACKed or not confirmed (attempt %d/%d).",
-                        self.exchange_name,
-                        routing_key,
-                        attempt + 1,
-                        retry_attempts,
-                    )
-                    # Handle NACK: could retry, log, or send to DLX.
+                self.logger.warning(
+                    "Message to exchange `%s` with routing key `%s` was "
+                    "NACKed or not confirmed (attempt %d/%d).",
+                    self.exchange_name,
+                    routing_key,
+                    attempt + 1,
+                    retry_attempts,
+                )
+                # Handle NACK: could retry, log, or send to DLX.
 
             except pika.exceptions.UnroutableError:
                 self.logger.error(
@@ -408,7 +407,13 @@ class Settings:  # pylint: disable=too-few-public-methods, too-many-instance-att
         self.rabbitmq_amqp_url: Optional[str] = secrets.get("rabbitmq_amqp_url")
         if self.rabbitmq_amqp_url:
             _validate_url(self.rabbitmq_amqp_url)
-        self.rabbitmq_exchange_name: str = secrets.get("rabbitmq_exchange_name")
+        self.rabbitmq_exchange_name: Optional[str] = secrets.get(
+            "rabbitmq_exchange_name"
+        )
+        if self.rabbitmq_amqp_url and not self.rabbitmq_exchange_name:
+            raise RuntimeError(
+                "RabbitMQ AMQP URL provided but exchange name is missing."
+            )
 
         if not (
             self.webhooks
