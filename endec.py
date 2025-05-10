@@ -948,7 +948,6 @@ class Discord:  # pylint: disable=too-few-public-methods
         payload = {"embeds": [embed], "username": "WBOR ENDEC Alerter"}
 
         for client in self.webhook_clients:
-            LOGGER.info("POST to Discord webhook `%s`", client.url)
             client.post(payload)
 
 
@@ -1007,12 +1006,6 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         for segment_idx, segment in enumerate(segments):
             for bot_id in self.bot_ids:
                 payload = {"bot_id": bot_id, "text": segment}
-                LOGGER.info(
-                    "POST to GroupMe Bot ID `%s` (segment %d/%d)",
-                    bot_id,
-                    segment_idx + 1,
-                    len(segments),
-                )
                 self.webhook_client.post(payload)
 
 
@@ -1068,7 +1061,7 @@ def dispatch(
 
     # RabbitMQ
     if rabbitmq_publisher and cfg.rabbitmq_amqp_url and eas_fields:
-        LOGGER.info(
+        LOGGER.debug(
             "Publishing to RabbitMQ with routing key `%s`", RABBITMQ_ROUTING_KEY
         )
 
@@ -1136,11 +1129,6 @@ def process_serial(
             header_line = cleaned_lines.pop()
             try:
                 eas_fields = parse_eas(header_line)
-                LOGGER.info(
-                    "New EAS Header: %s (%s)",
-                    eas_fields.get("event_name"),
-                    eas_fields.get("event"),
-                )
             except ValueError:
                 LOGGER.warning(
                     "Malformed EAS header found: %r. Treating as part of message.",
