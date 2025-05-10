@@ -903,7 +903,7 @@ class Discord:  # pylint: disable=too-few-public-methods
             # Originator
             {
                 "name": "Originator",
-                "value": f"{eas_fields.get("org", "N/A")} ({eas_fields.get("org_raw", "N/A")})",
+                "value": f'{eas_fields.get("org", "N/A")} ({eas_fields.get("org_raw", "N/A")})',
                 "inline": True,
             },
             # Timestamp Raw
