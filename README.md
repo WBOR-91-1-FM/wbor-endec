@@ -19,10 +19,11 @@ A secure, Open Source EAS ENDEC Logger to transmit News Feed messages recieved b
   - Generic HTTP(S) webhooks
   - GroupMe bot
   - Discord embed
-  - In the future, we would be open to PRs for other destinations, such as:
-    - [ ] Slack
-    - [ ] Email (SMTP)
-    - [ ] Twilio
+  - RabbitMQ
+- In the future, we would be open to PRs for other destinations, such as:
+  - [ ] Slack
+  - [ ] Email (SMTP)
+  - [ ] Twilio
 
 ## Configuration
 
@@ -63,6 +64,8 @@ sudo chmod 0644 /etc/wbor-endec/config.json
 - `webhooks`: List of webhook URLs to forward EAS messages to. These can be any HTTP(S) endpoint that accepts POST requests.
 - `groupme_bot_ids`: List of GroupMe bot IDs to forward EAS messages to. These can be found in the GroupMe developer portal (public, free).
 - `discord_urls`: List of Discord webhook URLs to forward EAS messages to. You can create a webhook in your Discord server channel settings.
+- `rabbitmq_amqp_url`: RabbitMQ AMQP URL to forward EAS messages to. This should be in the format `amqp://username:password@hostname:port/vhost`.
+- `rabbitmq_exchange_name`: The RabbitMQ exchange name to publish messages to. This is optional and defaults to `wbor-endec`.
 
 Save in a directory managed by systemd's `LoadCredential` (e.g. `/etc/wbor-endec/`) as `secrets.json` with permissions `0600` and owner `root:root`:
 
@@ -72,20 +75,6 @@ sudo cp secrets.json /etc/wbor-endec/secrets.json
 sudo chmod 0600 /etc/wbor-endec/secrets.json
 sudo chown root:root /etc/wbor-endec/secrets.json
 ```
-
---------------OLD
-`--com / -c`: The device to read from. This is the `/dev/` port for your ENDEC hardware. For example, if your ENDEC is connected to `/dev/ttyUSB0`, you would use `-c /dev/ttyUSB0`.
-
-`--trim / -t`: Trim the EAS message from the body before sending, which is always the final line. EAS messages follow the [format](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-11/subpart-B/section-11.31): `ZCZC-ORG-EEE-PSSCCC + TTTT-JJJHHMM-LLLLLLLL-`
-
-`--quiet / -q`: Trim the human readable message body, leaving ONLY the EAS message.
-
-### Destinations
-
-`--webhook / -w {URL_1, URL_2, ...}`: Webhook URL(s) to forward EAS messages to.
-
-`--groupme / -g {BOT_ID_1, BOT_ID_2, ...}`: GroupMe bot(s) to forward EAS messages to.
---------------OLD
 
 ## Installation & usage
 
@@ -123,11 +112,12 @@ Reference the template at `wbor-endec.service`.
 
 You will need to change:
 
-- `{DEVICE}` = the `/dev/` device you found in step 3, e.g. `/dev/ttyUSB0`. IMPORTANT NOTE: Systemd derives the device unit name from the path by converting slashes to dashes, e.g. /dev/ttyENDEC → dev-ttyENDEC.device. So, if your device is `/dev/ttyUSB0`, the unit name will be `dev-ttyUSB0.device`. You can check this by running `systemctl list-units --type=device` and looking for your device.
+- `{DEVICE}` = the `/dev/` device you found in step 3, e.g. `/dev/ttyUSB0`. IMPORTANT NOTE: Systemd derives the device unit name from the path by converting slashes to dashes, e.g. `/dev/ttyENDEC` → `dev-ttyENDEC.device`. So, if your device is `/dev/ttyUSB0`, the unit name will be `dev-ttyUSB0.device`. You can check this by running `systemctl list-units --type=device` and looking for your device.
+- `Environment=SECRETS_PATH={PATH_TO_SECRETS_JSON}` = path to the `secrets.json` file you created in the previous step (`/etc/wbor-endec/secrets.json`). This is where the script will look for the credentials.
 - Under `ExecStart`
-  - `{PYTHON_EXEC}` = directory for your Python executable, e.g. `/usr/bin/python3` or, if using a virtual environment, `/home/username/wbor-endec/venv/bin/python` (in most cases, you'll need to make one and then install the dependencies with `pip install -r requirements.txt`)
-  - `{SCRIPT_PATH}` = path to `OpenEndecV2.py`, e.g. `/home/username/wbor-endec/OpenEndecV2.py`
-  - `{OPTIONS}` = options for the scripts with respective arguments, e.g. `--groupme {BOT_ID}`
+  - `{PYTHON3_EXEC_PATH}` = directory for your Python executable, e.g. `/home/username/wbor-endec/venv/bin/python`
+  - `{SCRIPT_PATH}` = path to `endec.py`, e.g. `/home/username/wbor-endec/endec.py`
+  - `{PATH_TO_CONFIG_JSON}` = the path to the `config.json` file you created in the previous step (`/etc/wbor-endec/config.json`)
 - `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`
 - `User` = username for the user running wbor-endec (e.g. `pi` for Raspberry Pi)
 
@@ -162,5 +152,9 @@ To inspect the last 100 entries:
 ```sh
 sudo journalctl -u wbor-endec.service -n 100
 ```
+
+## TODO
+
+- [ ] Add support for setting different timezones (for users in different timezones)
 
 Maintained by WBOR 91.1 FM and [Mason Daugherty](https://github.com/mdrxy), originally inspired by [Evan Vander Stoep](https://github.com/evanvs).
