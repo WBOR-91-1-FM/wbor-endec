@@ -121,7 +121,7 @@ class RabbitMQPublisher:
             # Already connected
             return
         try:
-            self.logger.info(
+            self.logger.debug(
                 "Attempting to connect to RabbitMQ server at %s",
                 self.amqp_url.split("@")[-1],
             )
