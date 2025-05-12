@@ -1025,8 +1025,6 @@ class GroupMe:  # pylint: disable=too-few-public-methods
 # Message dispatch
 # ---------------------------------------------------------------------------
 
-RABBITMQ_ROUTING_KEY = "notification.wbor-endec"
-
 
 def dispatch(
     msg: str,
