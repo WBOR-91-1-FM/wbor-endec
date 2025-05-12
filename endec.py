@@ -902,49 +902,53 @@ class Discord:  # pylint: disable=too-few-public-methods
             {
                 "name": "Event",
                 "value": (
-                    f"{eas_fields.get('event_name', 'N/A')} ({eas_fields.get('event', 'N/A')})"
+                    f"{eas_fields.get('event_name', 'Not found')} "
+                    f"({eas_fields.get('event', 'Not found')})"
                 ),
                 "inline": True,
             },
             # Duration in minutes
             {
                 "name": "Duration (min)",
-                "value": str(eas_fields.get("duration_minutes", "N/A")),
+                "value": str(eas_fields.get("duration_minutes", "Not found")),
                 "inline": True,
             },
             # Start timestamp in UTC
             {
                 "name": "Start (UTC)",
-                "value": eas_fields.get("start_utc", "N/A"),
+                "value": eas_fields.get("start_utc", "Not found"),
                 "inline": True,
             },
             # Sending station's ID
             {
                 "name": "Sender",
-                "value": eas_fields.get("sender", "N/A"),
+                "value": eas_fields.get("sender", "Not found"),
                 "inline": True,
             },
             # Originator
             {
                 "name": "Originator",
-                "value": f'{eas_fields.get("org", "N/A")} ({eas_fields.get("org_raw", "N/A")})',
+                "value": (
+                    f'{eas_fields.get("org", "Not found")} '
+                    f'({eas_fields.get("org_raw", "Not found")})'
+                ),
                 "inline": True,
             },
             # Timestamp Raw
             {
                 "name": "Start (ET)",
-                "value": eas_fields.get("timestamp_et", "N/A"),
+                "value": eas_fields.get("timestamp_et", "Not found"),
                 "inline": True,
             },
             # All location codes
             {
                 "name": "Locations",
-                "value": ", ".join(eas_fields.get("locs", [])) or "N/A",
+                "value": ", ".join(eas_fields.get("locs", [])) or "Not found",
                 "inline": False,  # Best on its own line if long
             },
             {
                 "name": "Raw Header",
-                "value": f"```{eas_fields.get('raw_header', 'N/A')}```",
+                "value": f"```{eas_fields.get('raw_header', 'Not found')}```",
                 "inline": False,
             },
         ]
@@ -992,9 +996,9 @@ class GroupMe:  # pylint: disable=too-few-public-methods
             fields to include in the message.
         """
         event_name = eas_fields.get("event_name", "Unknown Event")
-        locs_str = ", ".join(eas_fields.get("locs", [])) or "N/A"
-        duration = eas_fields.get("duration_minutes", "N/A")
-        start_time = eas_fields.get("timestamp_et", "N/A")
+        locs_str = ", ".join(eas_fields.get("locs", [])) or "Not found"
+        duration = eas_fields.get("duration_minutes", "Not found")
+        start_time = eas_fields.get("timestamp_et", "Not found")
 
         full_message = (
             f"EAS Alert: {event_name}\n\n"
@@ -1002,7 +1006,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
             f"Locations: {locs_str}\n\n"
             f"Duration: {duration} minutes\n\n"
             f"Starts: {start_time} (ET)\n\n"
-            f"Sender: {eas_fields.get('sender', 'N/A')}"
+            f"Sender: {eas_fields.get('sender', 'Not found')}"
         )
 
         footer = (
@@ -1044,6 +1048,8 @@ def dispatch(
     - rabbitmq_publisher (Optional[RabbitMQPublisher]): Instance for
         RabbitMQ.
     """
+    processed_timestamp_utc: Optional[str] = None
+
     # Generic Webhooks
     if cfg.webhooks:
         # Send the raw message and full EAS fields separately
@@ -1094,7 +1100,7 @@ def dispatch(
             "source": "wbor-endec",
             "timestamp_processed_utc": processed_timestamp_utc,
             "message_text": msg,
-            "eas_data": {"event_name": "Plain Text Message", "raw_header": "N/A"},
+            "eas_data": {"event_name": "Plain Text Message", "raw_header": "Not found"},
         }
         rabbitmq_publisher.publish(rabbitmq_payload, cfg.rabbitmq_routing_key)
 
@@ -1129,7 +1135,7 @@ def process_serial(
             port.
         """
         eas_fields: Dict[str, Any] = {}
-        header_line: Optional[str] = None  # Potential EAS header line
+        message = ""
 
         # Clean up lines: strip whitespace, remove empty lines
         cleaned_lines = [line.strip() for line in lines if line.strip()]
@@ -1137,33 +1143,61 @@ def process_serial(
             LOGGER.debug("No content in buffer to send after cleaning.")
             return
 
-        # Attempt to find, parse EAS header
-        if cleaned_lines and cleaned_lines[-1].startswith("ZCZC"):
-            header_line = cleaned_lines.pop()
+        # Join all cleaned lines - assuming header parts don't have spaces between them
+        full_block_content = "".join(cleaned_lines)
+        header_match = HEADER_RE.search(full_block_content)
+
+        if header_match:
+            header_string = header_match.group(0)  # Get the full matched header
+            LOGGER.debug("Found potential EAS header: %s", header_string)
             try:
-                eas_fields = parse_eas(header_line)
+                eas_fields = parse_eas(header_string)
+                LOGGER.debug("Successfully parsed EAS header.")
+                # Remove the header string from the full content to get the message body
+                # Find the start and end index of the header in the original joined string
+                start_idx, end_idx = header_match.span()
+                # Combine text before and after the header, preserving potential spaces if needed.
+                # Using join with space might be safer if ENDEC text has newlines treated as spaces.
+                message_parts = []
+                # Get text before header (if any)
+                text_before = full_block_content[:start_idx].strip()
+                if text_before:
+                    message_parts.append(text_before)
+                # Get text after header (if any)
+                text_after = full_block_content[end_idx:].strip()
+                if text_after:
+                    message_parts.append(text_after)
+
+                # Join the parts that constitute the message body
+                message = " ".join(message_parts)
+
             except ValueError:
                 LOGGER.warning(
-                    "Malformed EAS header found: %r. Treating as part of message.",
-                    header_line,
+                    "Malformed EAS header found: `%r`. Treating entire block as message.",
+                    header_string,
                 )
-                cleaned_lines.append(header_line)  # Add it back if not parsable
-                header_line = None  # Clear it as it wasn't a valid header
+                # Parsing failed, treat the whole block as a message
+                message = " ".join(cleaned_lines)  # Re-join with spaces for readability
+                eas_fields = {}  # Ensure eas_fields is empty
+        else:
+            # No header found, treat the whole block as a message
+            LOGGER.debug("No EAS header pattern found in block.")
+            message = " ".join(cleaned_lines)  # Re-join with spaces for readability
+            eas_fields = {}
 
-        message = " ".join(cleaned_lines)
         if not message and not eas_fields:
             LOGGER.debug("No message content or EAS fields to dispatch.")
             return
 
-        if (
-            not message and eas_fields
-        ):  # If only an EAS header was sent (e.g. RWT with no text body)
-            # This shouldn't happen
+        if not message and eas_fields:
+            # Use event name as message if only header exists
             message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
 
         LOGGER.info(
             "Dispatching message. EAS Event: %s. Message snippet: '%s...'",
-            eas_fields.get("event_name", "N/A") if eas_fields else "No EAS Header",
+            eas_fields.get(
+                "event_name", "No EAS Header"
+            ),  # Use "No EAS Header" if empty
             message[:100],
         )
         dispatch(message, eas_fields, cfg, rabbitmq_publisher)
