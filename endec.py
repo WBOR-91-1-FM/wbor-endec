@@ -11,8 +11,8 @@ Authors:
 - Evan Vander Stoep <@evanvs>
 - Mason Daugherty <@mdrxy>
 
-Version: 4.0.0
-Last Modified: 2025-05-10
+Version: 4.1.1
+Last Modified: 2025-05-12
 
 Changelog:
     - 1.0.0 (????): Initial release <@evanvs>
@@ -22,6 +22,12 @@ Changelog:
     - 2.1.2 (2025-05-08): Refactor
     - 3.0.0 (2025-05-09): Secure refactor
     - 4.0.0 (2025-05-10): Added RabbitMQ support and some refactors
+    - 4.1.0 (2025-05-11): Enhanced EAS parsing with human readable
+        sender names, logging improvements, Python 3.7 backward
+        compatibility, timezone fixes, guard against some config values,
+        adjust log levels of some dependencies,
+    - 4.1.1 (2025-05-12): Make RabbitMQ routing key configurable in
+        secrets file
 """  # pylint: disable=too-many-lines
 
 from __future__ import annotations
@@ -176,7 +182,7 @@ class RabbitMQPublisher:
     def publish(
         self,
         message_body: Dict[str, Any],
-        routing_key: str = "notification.wbor-endec",
+        routing_key: str,
         retry_attempts: int = 3,
         retry_delay_seconds: int = 5,
     ) -> bool:
@@ -414,6 +420,12 @@ class Settings:  # pylint: disable=too-few-public-methods, too-many-instance-att
         self.rabbitmq_exchange_name: Optional[str] = secrets.get(
             "rabbitmq_exchange_name"
         )
+
+        # Default routing key if not specified in secrets
+        self.rabbitmq_routing_key: str = secrets.get(
+            "rabbitmq_routing_key", "notification.wbor-endec"
+        )
+
         if self.rabbitmq_amqp_url and not self.rabbitmq_exchange_name:
             raise RuntimeError(
                 "RabbitMQ AMQP URL provided but exchange name is missing."
@@ -1003,7 +1015,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         max_len = 450  # Leave some room
         segments = [body[i : i + max_len] for i in range(0, len(body), max_len)]
 
-        for segment_idx, segment in enumerate(segments):
+        for segment in enumerate(segments):
             for bot_id in self.bot_ids:
                 payload = {"bot_id": bot_id, "text": segment}
                 self.webhook_client.post(payload)
@@ -1062,7 +1074,9 @@ def dispatch(
     # RabbitMQ
     if rabbitmq_publisher and cfg.rabbitmq_amqp_url and eas_fields:
         LOGGER.debug(
-            "Publishing to RabbitMQ with routing key `%s`", RABBITMQ_ROUTING_KEY
+            "Publishing to RabbitMQ exchange `%s` with routing key `%s`",
+            cfg.rabbitmq_exchange_name,
+            cfg.rabbitmq_routing_key,
         )
 
         processed_timestamp_utc = datetime.now(timezone.utc).isoformat()
@@ -1073,17 +1087,18 @@ def dispatch(
             "message_text": msg,
             "eas_data": eas_fields,
         }
-        if not rabbitmq_publisher.publish(rabbitmq_payload, RABBITMQ_ROUTING_KEY):
+        if not rabbitmq_publisher.publish(rabbitmq_payload, cfg.rabbitmq_routing_key):
             LOGGER.error("Failed to publish message to RabbitMQ.")
     elif rabbitmq_publisher and cfg.rabbitmq_amqp_url and not eas_fields:
         LOGGER.warning("No EAS fields, publishing simplified message to RabbitMQ.")
+        processed_timestamp_utc = datetime.now(timezone.utc).isoformat()
         rabbitmq_payload = {
             "source": "wbor-endec",
             "timestamp_processed_utc": processed_timestamp_utc,
             "message_text": msg,
             "eas_data": {"event_name": "Plain Text Message", "raw_header": "N/A"},
         }
-        rabbitmq_publisher.publish(rabbitmq_payload, RABBITMQ_ROUTING_KEY)
+        rabbitmq_publisher.publish(rabbitmq_payload, cfg.rabbitmq_routing_key)
 
 
 # ---------------------------------------------------------------------------
@@ -1250,7 +1265,6 @@ def process_serial(
         finally:
             if ser and ser.isOpen():
                 ser.close()
-                rabbitmq_publisher.ensure_connection()
 
             if (
                 rabbitmq_publisher
@@ -1333,19 +1347,20 @@ def main() -> None:  # pylint: disable=missing-function-docstring
     LOGGER.info("wbor-endec starting on serial port `%s`", cfg.port)
     LOGGER.info(
         "Authors: Evan Vander Stoep <@evanvs>, Mason Daugherty <@mdrxy>\n"
-        "Version: 4.0.0\n"
+        "Version: 4.1.1\n"
         "WBOR 91.1 FM [https://wbor.org]\n"
     )
 
     # Initialize RabbitMQ Publisher if configured
-    if cfg.rabbitmq_amqp_url:
+    if cfg.rabbitmq_amqp_url and cfg.rabbitmq_exchange_name:
         try:
             rabbitmq_publisher = RabbitMQPublisher(
                 amqp_url=cfg.rabbitmq_amqp_url, exchange_name=cfg.rabbitmq_exchange_name
             )
             LOGGER.info(
-                "RabbitMQ publisher initialized for exchange `%s`.",
+                "RabbitMQ publisher initialized for exchange `%s` (routing key: `%s`).",
                 cfg.rabbitmq_exchange_name,
+                cfg.rabbitmq_routing_key,
             )
         except Exception as e:  # pylint: disable=broad-except
             LOGGER.error(
@@ -1354,6 +1369,10 @@ def main() -> None:  # pylint: disable=missing-function-docstring
                 exc_info=True,
             )
             rabbitmq_publisher = None  # Ensure it's None if init fails
+    elif cfg.rabbitmq_amqp_url and not cfg.rabbitmq_exchange_name:
+        LOGGER.error(
+            "RabbitMQ AMQP URL provided but exchange name is missing. RabbitMQ disabled."
+        )
 
     try:
         process_serial(cfg, rabbitmq_publisher)
