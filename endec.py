@@ -49,10 +49,12 @@ from urllib.parse import urlparse
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
-    from backports.zoneinfo import ZoneInfo
+    from backports.zoneinfo import ZoneInfo  # type: ignore[import]
 
 import pika
 import requests
+from pika.adapters.blocking_connection import BlockingChannel
+from pika.exceptions import AMQPChannelError, AMQPConnectionError, UnroutableError
 from serial import Serial
 from serial.serialutil import SerialException
 
@@ -115,8 +117,9 @@ class RabbitMQPublisher:
         self.exchange_name = exchange_name
         self.exchange_type = exchange_type
         self._connection: Optional[pika.BlockingConnection] = None
-        self._channel: Optional[pika.channel.Channel] = None
+        self._channel: Optional[BlockingChannel] = None
         self.logger = logging.getLogger(__name__ + ".RabbitMQPublisher")
+        self._connect()
         self._connect()
 
     def _connect(self) -> None:
@@ -146,12 +149,12 @@ class RabbitMQPublisher:
             # and not just simply sent to the RabbitMQ server.
             self._channel.confirm_delivery()
             self.logger.info(
-                "Successfully connected to RabbitMQ and declared exchange `%s` "
+                "Successfully connected to RabbitMQ and ensured exchange `%s` "
                 "(type: %s)",
                 self.exchange_name,
                 self.exchange_type,
             )
-        except pika.exceptions.AMQPConnectionError as e:
+        except AMQPConnectionError as e:
             self.logger.error("Failed to connect to RabbitMQ: %s", e)
             self._connection = None
             self._channel = None
@@ -217,7 +220,7 @@ class RabbitMQPublisher:
                     routing_key=routing_key,
                     body=message_body_str,
                     properties=pika.BasicProperties(
-                        delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
+                        delivery_mode=2,  # 2 is persistent delivery mode
                         content_type="application/json",
                     ),
                     mandatory=True,  # Important for unroutable messages
@@ -238,8 +241,7 @@ class RabbitMQPublisher:
                     retry_attempts,
                 )
                 # Handle NACK: could retry, log, or send to DLX.
-
-            except pika.exceptions.UnroutableError:
+            except UnroutableError:
                 self.logger.error(
                     "Message to exchange `%s` with routing key `%s` was unroutable. "
                     "Ensure a queue is bound with this routing key or the exchange exists "
@@ -249,8 +251,8 @@ class RabbitMQPublisher:
                 )
                 return False  # Do not retry unroutable messages automatically
             except (
-                pika.exceptions.AMQPConnectionError,
-                pika.exceptions.AMQPChannelError,
+                AMQPConnectionError,
+                AMQPChannelError,
             ) as e:
                 self.logger.error(
                     "Connection/Channel error during publish (attempt %d/%d): %s",
@@ -688,15 +690,14 @@ CATEGORY_COLORS = {
 }
 
 # EAS header regex, spec defined in parse_eas() docstring
-HEADER_RE = re.compile(
-    r"^ZCZC-"  # start
-    r"(?P<org>[A-Z]{3})-"  # ORG
+HEADER_SEARCH_RE = re.compile(
+    r"ZCZC-"  # Start
+    r"(?P<org>[A-Z]{3})-"
     r"(?P<event>[A-Z]{3})-"  # EEE
     r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
     r"\+(?P<dur>\d{4})-"  # +TTTT
     r"(?P<ts>\d{7})-"  # JJJHHMM
-    r"(?P<sender>[A-Z0-9/ ]{8})-"  # LLLLLLLL allowing space padding
-    r"$"
+    r"(?P<sender>[A-Z0-9/ ]{8})-"  # LLLLLLLL-
 )
 
 
@@ -745,7 +746,7 @@ def parse_eas(header: str) -> Dict[str, Any]:
         - event_name: Human-readable event name (if available)
         - raw_header: The original header string
     """
-    m = HEADER_RE.match(header)
+    m = HEADER_SEARCH_RE.match(header)
     if not m:
         raise ValueError("Malformed EAS header")
 
@@ -1019,9 +1020,13 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         max_len = 450  # Leave some room
         segments = [body[i : i + max_len] for i in range(0, len(body), max_len)]
 
-        for segment in enumerate(segments):
+        # Iterate directly over the text_chunk in segments
+        for text_chunk in segments:
             for bot_id in self.bot_ids:
-                payload = {"bot_id": bot_id, "text": segment}
+                payload = {
+                    "bot_id": bot_id,
+                    "text": text_chunk,
+                }
                 self.webhook_client.post(payload)
 
 
@@ -1135,69 +1140,92 @@ def process_serial(
             port.
         """
         eas_fields: Dict[str, Any] = {}
-        message = ""
+        message: str = ""
 
-        # Clean up lines: strip whitespace, remove empty lines
         cleaned_lines = [line.strip() for line in lines if line.strip()]
         if not cleaned_lines:
             LOGGER.debug("No content in buffer to send after cleaning.")
             return
 
-        # Join all cleaned lines - assuming header parts don't have spaces between them
+        # Join all cleaned lines. This is key if the header itself spans multiple lines
+        # and those lines should be directly concatenated.
         full_block_content = "".join(cleaned_lines)
-        header_match = HEADER_RE.search(full_block_content)
+
+        # Search for the EAS header pattern within the combined content
+        # using the less strict HEADER_SEARCH_RE.
+        header_match = HEADER_SEARCH_RE.search(full_block_content)
 
         if header_match:
-            header_string = header_match.group(0)  # Get the full matched header
-            LOGGER.debug("Found potential EAS header: %s", header_string)
+            # Extract the exact header string that was matched by HEADER_SEARCH_RE
+            header_string = header_match.group(0)
+            LOGGER.debug(
+                "Found potential EAS header string via search: %s", header_string
+            )
+
             try:
+                # parse_eas uses the stricter HEADER_SEARCH_RE (with ^ and $)
+                # to validate that the extracted header_string is indeed a
+                # well-formed, complete header.
                 eas_fields = parse_eas(header_string)
-                LOGGER.debug("Successfully parsed EAS header.")
-                # Remove the header string from the full content to get the message body
-                # Find the start and end index of the header in the original joined string
-                start_idx, end_idx = header_match.span()
-                # Combine text before and after the header, preserving potential spaces if needed.
-                # Using join with space might be safer if ENDEC text has newlines treated as spaces.
-                message_parts = []
-                # Get text before header (if any)
-                text_before = full_block_content[:start_idx].strip()
-                if text_before:
-                    message_parts.append(text_before)
-                # Get text after header (if any)
-                text_after = full_block_content[end_idx:].strip()
-                if text_after:
-                    message_parts.append(text_after)
-
-                # Join the parts that constitute the message body
-                message = " ".join(message_parts)
-
-            except ValueError:
-                LOGGER.warning(
-                    "Malformed EAS header found: `%r`. Treating entire block as message.",
-                    header_string,
+                LOGGER.debug(
+                    "Successfully parsed EAS header: %s",
+                    eas_fields.get("event_name", "Unknown"),
                 )
-                # Parsing failed, treat the whole block as a message
-                message = " ".join(cleaned_lines)  # Re-join with spaces for readability
-                eas_fields = {}  # Ensure eas_fields is empty
+
+                # Extract message body: text before and/or after the found header
+                start_idx, end_idx = (
+                    header_match.span()
+                )  # Get where the header was found
+
+                text_before_header = full_block_content[:start_idx].strip()
+                text_after_header = full_block_content[end_idx:].strip()
+
+                message_parts = []
+                if text_before_header:
+                    message_parts.append(text_before_header)
+                if (
+                    text_after_header
+                ):  # This would catch text if ENDEC sends more after the header's final dash
+                    message_parts.append(text_after_header)
+
+                message = " ".join(message_parts).strip()
+
+                # If message is empty but we have EAS fields (e.g. header was
+                # the only content, or only content after stripping)
+                if not message and eas_fields:
+                    message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
+
+            except ValueError as e:
+                # This means header_string looked like a header to HEADER_SEARCH_RE,
+                # but parse_eas (with the strict HEADER_SEARCH_RE) rejected it.
+                LOGGER.warning(
+                    "Potentially malformed EAS header string '%s' (ValueError: %s). Treating "
+                    "entire block as message.",
+                    header_string,
+                    e,
+                )
+                message = " ".join(
+                    cleaned_lines
+                )  # Fallback: use original lines joined with spaces
+                eas_fields = {}
         else:
-            # No header found, treat the whole block as a message
-            LOGGER.debug("No EAS header pattern found in block.")
-            message = " ".join(cleaned_lines)  # Re-join with spaces for readability
+            # No header pattern found anywhere in the block
+            LOGGER.debug("No EAS header pattern found in block using search.")
+            message = " ".join(cleaned_lines)  # Use original lines joined with spaces
             eas_fields = {}
 
-        if not message and not eas_fields:
-            LOGGER.debug("No message content or EAS fields to dispatch.")
-            return
-
+        # Final check: if message is still empty but we have valid EAS fields
         if not message and eas_fields:
-            # Use event name as message if only header exists
             message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
+        elif not message and not eas_fields:
+            LOGGER.debug(
+                "No message content or EAS fields to dispatch after processing."
+            )
+            return
 
         LOGGER.info(
             "Dispatching message. EAS Event: %s. Message snippet: '%s...'",
-            eas_fields.get(
-                "event_name", "No EAS Header"
-            ),  # Use "No EAS Header" if empty
+            eas_fields.get("event_name", "No EAS Header"),  # Default if no event_name
             message[:100],
         )
         dispatch(message, eas_fields, cfg, rabbitmq_publisher)
@@ -1212,7 +1240,8 @@ def process_serial(
             buffer: List[str] = []
             in_message_block = False
 
-            while ser.isOpen():
+            while ser.is_open:
+                raw_bytes = b""
                 try:
                     raw_bytes = ser.readline()
                     if not raw_bytes:  # Timeout occurred, loop again
@@ -1295,7 +1324,7 @@ def process_serial(
                 "Unexpected error in serial processing loop: %s", e, exc_info=True
             )
         finally:
-            if ser and ser.isOpen():
+            if ser and ser.is_open:
                 ser.close()
 
             if (
