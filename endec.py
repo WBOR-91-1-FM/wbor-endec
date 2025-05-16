@@ -690,6 +690,18 @@ CATEGORY_COLORS = {
 }
 
 # EAS header regex, spec defined in parse_eas() docstring
+# HEADER_RE (strict, anchored)
+# HEADER_SEARCH_RE (not anchored)
+HEADER_RE = re.compile(
+    r"^ZCZC-"  # Start
+    r"(?P<org>[A-Z]{3})-"
+    r"(?P<event>[A-Z]{3})-"  # EEE
+    r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
+    r"\+(?P<dur>\d{4})-"  # +TTTT
+    r"(?P<ts>\d{7})-"  # JJJHHMM
+    r"(?P<sender>[A-Z0-9/ ]{8})-$"  # LLLLLLLL-
+)
+
 HEADER_SEARCH_RE = re.compile(
     r"ZCZC-"  # Start
     r"(?P<org>[A-Z]{3})-"
@@ -1133,102 +1145,130 @@ def process_serial(
     def transform_and_send(lines: List[str]) -> None:
         """
         Transform the incoming lines into a message and send it to the
-        configured destinations.
+        configured destinations. Uses two attempts to find a valid EAS
+        header and message body with different regex patterns.
 
         Parameters:
         - lines (List[str]): The list of lines read from the serial
             port.
         """
         eas_fields: Dict[str, Any] = {}
-        message: str = ""
+        final_message_str: str = ""
 
         cleaned_lines = [line.strip() for line in lines if line.strip()]
         if not cleaned_lines:
             LOGGER.debug("No content in buffer to send after cleaning.")
             return
 
-        # Join all cleaned lines. This is key if the header itself spans multiple lines
-        # and those lines should be directly concatenated.
-        full_block_content = "".join(cleaned_lines)
+        # Attempt 1: Check for a complete header on a single line
+        found_header_on_single_line = False
+        single_line_header_index = -1
 
-        # Search for the EAS header pattern within the combined content
-        # using the less strict HEADER_SEARCH_RE.
-        header_match = HEADER_SEARCH_RE.search(full_block_content)
+        for i, line in enumerate(cleaned_lines):
+            if HEADER_RE.match(line):  # Strict match for the whole line
+                try:
+                    potential_eas_fields = parse_eas(line)
+                    eas_fields = potential_eas_fields  # Parsed successfully
+                    single_line_header_index = i
+                    found_header_on_single_line = True
+                    LOGGER.debug(
+                        "Attempt 1: Found and parsed complete EAS header on line %d: %s",
+                        i,
+                        line,
+                    )
+                    break
+                except ValueError:
+                    # Line looked like a header but failed full validation
+                    LOGGER.debug(
+                        "Attempt 1: Line '%s' seemed like a header but failed parse_eas.",
+                        line,
+                    )
+                    continue  # Keep checking other lines
 
-        if header_match:
-            # Extract the exact header string that was matched by HEADER_SEARCH_RE
-            header_string = header_match.group(0)
-            LOGGER.debug(
-                "Found potential EAS header string via search: %s", header_string
-            )
-
-            try:
-                # parse_eas uses the stricter HEADER_SEARCH_RE (with ^ and $)
-                # to validate that the extracted header_string is indeed a
-                # well-formed, complete header.
-                eas_fields = parse_eas(header_string)
-                LOGGER.debug(
-                    "Successfully parsed EAS header: %s",
-                    eas_fields.get("event_name", "Unknown"),
-                )
-
-                # Extract message body: text before and/or after the found header
-                start_idx, end_idx = (
-                    header_match.span()
-                )  # Get where the header was found
-
-                text_before_header = full_block_content[:start_idx].strip()
-                text_after_header = full_block_content[end_idx:].strip()
-
-                message_parts = []
-                if text_before_header:
-                    message_parts.append(text_before_header)
-                if (
-                    text_after_header
-                ):  # This would catch text if ENDEC sends more after the header's final dash
-                    message_parts.append(text_after_header)
-
-                message = " ".join(message_parts).strip()
-
-                # If message is empty but we have EAS fields (e.g. header was
-                # the only content, or only content after stripping)
-                if not message and eas_fields:
-                    message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
-
-            except ValueError as e:
-                # This means header_string looked like a header to HEADER_SEARCH_RE,
-                # but parse_eas (with the strict HEADER_SEARCH_RE) rejected it.
-                LOGGER.warning(
-                    "Potentially malformed EAS header string '%s' (ValueError: %s). Treating "
-                    "entire block as message.",
-                    header_string,
-                    e,
-                )
-                message = " ".join(
-                    cleaned_lines
-                )  # Fallback: use original lines joined with spaces
-                eas_fields = {}
+        if found_header_on_single_line:
+            message_body_lines = [
+                line
+                for idx, line in enumerate(cleaned_lines)
+                if idx != single_line_header_index
+            ]
+            final_message_str = " ".join(message_body_lines).strip()
         else:
-            # No header pattern found anywhere in the block
-            LOGGER.debug("No EAS header pattern found in block using search.")
-            message = " ".join(cleaned_lines)  # Use original lines joined with spaces
-            eas_fields = {}
-
-        # Final check: if message is still empty but we have valid EAS fields
-        if not message and eas_fields:
-            message = eas_fields.get("event_name", "EAS Alert (No Text Body)")
-        elif not message and not eas_fields:
+            # Attempt 2: Header might be fragmented or embedded; search in concatenated content
             LOGGER.debug(
-                "No message content or EAS fields to dispatch after processing."
+                "Attempt 1 failed. Proceeding to Attempt 2 (concatenated search for "
+                "fragmented/embedded header)."
             )
+            content_for_header_search = "".join(
+                cleaned_lines
+            )  # Join without spaces for header reconstruction
+
+            header_match_in_joined = HEADER_SEARCH_RE.search(content_for_header_search)
+
+            if header_match_in_joined:
+                candidate_header_str = header_match_in_joined.group(0)
+                try:
+                    eas_fields = parse_eas(
+                        candidate_header_str
+                    )  # Validate with strict HEADER_RE
+                    LOGGER.debug(
+                        "Attempt 2: Found and parsed EAS header from joined content: %s",
+                        eas_fields.get("event_name", candidate_header_str),
+                    )
+
+                    # Construct message from text before/after the header in the joined string.
+                    # This is where inter-line spaces in the message portion might be lost if that
+                    # portion was multi-line.
+                    text_before_header = content_for_header_search[
+                        : header_match_in_joined.span()[0]
+                    ].strip()
+                    text_after_header = content_for_header_search[
+                        header_match_in_joined.span()[1] :
+                    ].strip()
+
+                    message_parts = []
+                    if text_before_header:
+                        message_parts.append(text_before_header)
+                    if text_after_header:
+                        message_parts.append(text_after_header)
+
+                    final_message_str = " ".join(message_parts).strip()
+                    LOGGER.debug(
+                        "Attempt 2: Message body from joined content: Before='\%s', After='\%s'",
+                        text_before_header,
+                        text_after_header,
+                    )
+
+                except ValueError:
+                    LOGGER.warning(
+                        "Attempt 2: String `%s` found by search did not validate as EAS header. "
+                        "Treating all lines as message.",
+                        candidate_header_str,
+                    )
+                    # Fallback: No valid header found, treat all original lines as message with
+                    # spaces
+                    final_message_str = " ".join(cleaned_lines).strip()
+                    eas_fields = {}  # Ensure it's empty
+            else:
+                # No header found by either method
+                LOGGER.debug(
+                    "Attempt 2: No EAS header pattern found in joined content."
+                )
+                final_message_str = " ".join(cleaned_lines).strip()
+                eas_fields = {}
+
+        # Fallback message if parsing yielded EAS fields but no actual message body text was derived
+        if not final_message_str and eas_fields:
+            final_message_str = eas_fields.get("event_name", "EAS Alert (No Text Body)")
+        elif not final_message_str and not eas_fields:  # No message and no header
+            LOGGER.debug("No message content or EAS fields to dispatch.")
             return
 
         LOGGER.info(
             "Dispatching message. EAS Event: %s. Message snippet: '%s...'",
-            eas_fields.get("event_name", "No EAS Header"),  # Default if no event_name
-            message[:100],
+            eas_fields.get("event_name", "No EAS Header"),
+            final_message_str[:100],
         )
-        dispatch(message, eas_fields, cfg, rabbitmq_publisher)
+        dispatch(final_message_str, eas_fields, cfg, rabbitmq_publisher)
 
     while True:
         ser: Optional[Serial] = None
