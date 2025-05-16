@@ -1180,7 +1180,7 @@ def process_serial(
                 except ValueError:
                     # Line looked like a header but failed full validation
                     LOGGER.debug(
-                        "Attempt 1: Line '%s' seemed like a header but failed parse_eas.",
+                        "Attempt 1: Line %s seemed like a header but failed parse_eas.",
                         line,
                     )
                     continue  # Keep checking other lines
@@ -1233,7 +1233,7 @@ def process_serial(
 
                     final_message_str = " ".join(message_parts).strip()
                     LOGGER.debug(
-                        "Attempt 2: Message body from joined content: Before='\%s', After='\%s'",
+                        "Attempt 2: Message body from joined content: Before=`%s`, After=`%s`",
                         text_before_header,
                         text_after_header,
                     )
@@ -1264,7 +1264,7 @@ def process_serial(
             return
 
         LOGGER.info(
-            "Dispatching message. EAS Event: %s. Message snippet: '%s...'",
+            "Dispatching message. EAS Event: %s. Message snippet: `%s...`",
             eas_fields.get("event_name", "No EAS Header"),
             final_message_str[:100],
         )
