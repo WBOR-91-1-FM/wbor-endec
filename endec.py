@@ -155,7 +155,7 @@ class RabbitMQPublisher:
                 self.exchange_type,
             )
         except AMQPConnectionError as e:
-            self.logger.error("Failed to connect to RabbitMQ: %s", e)
+            self.logger.critical("Failed to connect to RabbitMQ: %s", e)
             self._connection = None
             self._channel = None
             raise
@@ -1024,7 +1024,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
 
         footer = (
             "\n\n(This is an automated message)\n"
-            "[WBOR-91-1-FM/wbor-endec]\n----------"
+            "(WBOR-91-1-FM/wbor-endec)\n----------"
         )
         body = f"{full_message}{footer}"
 
@@ -1372,13 +1372,11 @@ def process_serial(
             ):  # Check connection periodically if RabbitMQ is enabled
                 try:
                     rabbitmq_publisher.ensure_connection()
-                except Exception as rq_conn_err:  # pylint: disable=broad-except
-                    LOGGER.error(
-                        "Periodic RabbitMQ connection check failed: %s", rq_conn_err
-                    )
+                except Exception:  # pylint: disable=broad-except
+                    LOGGER.exception("Periodic RabbitMQ connection check failed")
 
             LOGGER.info(
-                "Waiting 5 seconds before retrying serial connection or next check..."
+                "Waiting 5 seconds before retrying serial processing loop due to a failure..."
             )
             time.sleep(5)
 
