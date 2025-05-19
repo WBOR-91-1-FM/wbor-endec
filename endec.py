@@ -699,7 +699,7 @@ HEADER_RE = re.compile(
     r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
     r"\+(?P<dur>\d{4})-"  # +TTTT
     r"(?P<ts>\d{7})-"  # JJJHHMM
-    r"(?P<sender>[A-Z0-9/ ]{8})-$"  # LLLLLLLL-
+    r"(?P<sender>[A-Za-z0-9/ ]{8})-$"  # LLLLLLLL-
 )
 
 HEADER_SEARCH_RE = re.compile(
@@ -709,7 +709,7 @@ HEADER_SEARCH_RE = re.compile(
     r"(?P<locs>(?:\d{6}-){0,30}\d{6})"  # 1-31 location codes
     r"\+(?P<dur>\d{4})-"  # +TTTT
     r"(?P<ts>\d{7})-"  # JJJHHMM
-    r"(?P<sender>[A-Z0-9/ ]{8})-"  # LLLLLLLL-
+    r"(?P<sender>[A-Za-z0-9/ ]{8})-"  # LLLLLLLL-
 )
 
 
