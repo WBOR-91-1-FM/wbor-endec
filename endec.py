@@ -1127,7 +1127,7 @@ def dispatch(
 # ---------------------------------------------------------------------------
 
 
-def process_serial(
+def process_serial(  # pylint: disable=too-many-branches, too-many-statements
     cfg: Settings, rabbitmq_publisher: Optional[RabbitMQPublisher]
 ) -> None:
     """
@@ -1142,7 +1142,7 @@ def process_serial(
         RabbitMQ publishing.
     """
 
-    def transform_and_send(lines: List[str]) -> None:
+    def transform_and_send(lines: List[str]) -> None:  # pylint: disable=too-many-locals
         """
         Transform the incoming lines into a message and send it to the
         configured destinations. Uses two attempts to find a valid EAS
@@ -1185,7 +1185,7 @@ def process_serial(
                     )
                     continue  # Keep checking other lines
 
-        if found_header_on_single_line:
+        if found_header_on_single_line:  # pylint: disable=too-many-nested-blocks
             message_body_lines = [
                 line
                 for idx, line in enumerate(cleaned_lines)
@@ -1207,35 +1207,77 @@ def process_serial(
             if header_match_in_joined:
                 candidate_header_str = header_match_in_joined.group(0)
                 try:
-                    eas_fields = parse_eas(
-                        candidate_header_str
-                    )  # Validate with strict HEADER_RE
+                    eas_fields = parse_eas(candidate_header_str)
                     LOGGER.debug(
                         "Attempt 2: Found and parsed EAS header from joined content: %s",
                         eas_fields.get("event_name", candidate_header_str),
                     )
 
-                    # Construct message from text before/after the header in the joined string.
-                    # This is where inter-line spaces in the message portion might be lost if that
-                    # portion was multi-line.
-                    text_before_header = content_for_header_search[
-                        : header_match_in_joined.span()[0]
-                    ].strip()
-                    text_after_header = content_for_header_search[
-                        header_match_in_joined.span()[1] :
-                    ].strip()
+                    # The header was found in `content_for_header_search` at
+                    # `header_match_in_joined.span()`.
+                    # We need to iterate through `cleaned_lines` and pick out the parts that are NOT
+                    # part of the header.
 
-                    message_parts = []
-                    if text_before_header:
-                        message_parts.append(text_before_header)
-                    if text_after_header:
-                        message_parts.append(text_after_header)
+                    match_span_in_concat = (
+                        header_match_in_joined.span()
+                    )  # (start_char_idx, end_char_idx) of header in concatenated string
 
-                    final_message_str = " ".join(message_parts).strip()
+                    message_fragments = []
+                    current_concat_pos = 0
+                    for original_line in cleaned_lines:
+                        line_len = len(original_line)
+                        line_concat_start = current_concat_pos
+                        line_concat_end = current_concat_pos + line_len
+
+                        # Determine parts of original_line to keep based on its position
+                        # relative to the header's span in the concatenated string.
+
+                        # Part of the line that falls BEFORE the header match segment
+                        if line_concat_start < match_span_in_concat[0]:
+                            # End of this pre-header segment is the earlier of line_end or
+                            # header_start
+                            actual_end_for_pre_segment = min(
+                                line_concat_end, match_span_in_concat[0]
+                            )
+                            num_chars_in_pre_segment = (
+                                actual_end_for_pre_segment - line_concat_start
+                            )
+                            if num_chars_in_pre_segment > 0:
+                                message_fragments.append(
+                                    original_line[:num_chars_in_pre_segment]
+                                )
+
+                        # Part of the line that falls AFTER the header match segment
+                        if line_concat_end > match_span_in_concat[1]:
+                            # Start of this post-header segment is the later of line_start or
+                            # header_end
+                            actual_start_for_post_segment = max(
+                                line_concat_start, match_span_in_concat[1]
+                            )
+                            num_chars_in_post_segment = (
+                                line_concat_end - actual_start_for_post_segment
+                            )
+                            if num_chars_in_post_segment > 0:
+                                # Calculate slice start offset relative to the current original_line
+                                slice_start_offset = (
+                                    actual_start_for_post_segment - line_concat_start
+                                )
+                                message_fragments.append(
+                                    original_line[slice_start_offset:]
+                                )
+
+                        current_concat_pos = line_concat_end
+
+                    # Join the collected fragments with spaces.
+                    # Filter out any fragments that might have become empty.
+                    final_message_str = " ".join(
+                        frag for frag in message_fragments if frag
+                    ).strip()
+
                     LOGGER.debug(
-                        "Attempt 2: Message body from joined content: Before=`%s`, After=`%s`",
-                        text_before_header,
-                        text_after_header,
+                        "Attempt 2: Reconstructed message body from original lines (excluding "
+                        "header): `%.200s`",
+                        final_message_str,
                     )
 
                 except ValueError:
@@ -1270,7 +1312,7 @@ def process_serial(
         )
         dispatch(final_message_str, eas_fields, cfg, rabbitmq_publisher)
 
-    while True:
+    while True:  # pylint: disable=too-many-nested-blocks
         ser: Optional[Serial] = None
         try:
             LOGGER.debug("Opening serial port `%s` at 9600 baud.", cfg.port)
@@ -1386,7 +1428,7 @@ def process_serial(
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:  # pylint: disable=missing-function-docstring
+def main() -> None:  # pylint: disable=missing-function-docstring, too-many-statements
     # Get public config
     parser = argparse.ArgumentParser(description="WBOR ENDEC Decoder & Publisher")
     parser.add_argument(
