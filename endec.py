@@ -222,15 +222,15 @@ class RabbitMQPublisher:
                         routing_key,
                     )
                     return True
-                else:
-                    self.logger.warning(
-                        "Message to exchange `%s` with routing key `%s` was "
-                        "NACKed or not confirmed (attempt %d/%d).",
-                        self.exchange_name,
-                        routing_key,
-                        attempt + 1,
-                        retry_attempts,
-                    )
+
+                self.logger.warning(
+                    "Message to exchange `%s` with routing key `%s` was "
+                    "NACKed or not confirmed (attempt %d/%d).",
+                    self.exchange_name,
+                    routing_key,
+                    attempt + 1,
+                    retry_attempts,
+                )
                 # Handle NACK: could retry, log, or send to DLX.
             except UnroutableError:
                 self.logger.exception(
