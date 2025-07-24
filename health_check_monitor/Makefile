@@ -31,6 +31,7 @@ run: stop
 		--log-driver json-file \
 		--log-opt max-size=30m \
 		--log-opt max-file=30 \
+		--env-file .env \
 		-v ${HOST_DIR}/logs:/app/logs \
 		$(IMAGE_NAME)
 
