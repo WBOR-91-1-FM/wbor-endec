@@ -69,7 +69,7 @@ service-logs: ## View systemd service logs
 # Environment setup
 config-create: ## Create config.json template
 	@if [ ! -f config.json ]; then \
-		echo '{\n  "port": "/dev/ttyUSB0",\n  "logfile": "/var/log/wbor-endec/wbor-endec.log",\n  "debug": false\n}' > config.json; \
+		echo '{\n  "port": "/dev/ttyUSB0",\n  "logfile": "/var/log/wbor-endec/wbor-endec.log",\n  "debug": false,\n  "timezone": "America/New_York"\n}' > config.json; \
 		echo "Created config.json template - please edit with your configuration"; \
 	else \
 		echo "config.json already exists"; \

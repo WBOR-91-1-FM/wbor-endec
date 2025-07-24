@@ -464,6 +464,26 @@ def _validate_url(u: str) -> str:
     return u
 
 
+def _validate_timezone(tz: str) -> str:
+    """Validate that the given string is a valid timezone.
+
+    Args:
+        tz: The timezone string to validate.
+
+    Returns:
+        The validated timezone string.
+
+    Raises:
+        RuntimeError: If the timezone is invalid.
+    """
+    try:
+        ZoneInfo(tz)
+    except Exception as e:
+        msg = f"Invalid timezone: `{tz!r}` - {e}"
+        raise RuntimeError(msg) from e
+    return tz
+
+
 class Settings:  # pylint: disable=too-few-public-methods, too-many-instance-attributes
     """Runtime configuration merged from config + secrets."""
 
@@ -485,6 +505,10 @@ class Settings:  # pylint: disable=too-few-public-methods, too-many-instance-att
 
         self.debug: bool = bool(public_cfg.get("debug", False))
         self.logfile: str | None = public_cfg.get("logfile")
+
+        # Timezone configuration with default to Eastern Time for backward compatibility
+        timezone_str = public_cfg.get("timezone", "America/New_York")
+        self.timezone: str = _validate_timezone(timezone_str)
 
         raw_webhooks = secrets.get("webhooks", [])
         self.webhooks = [_validate_url(u) for u in raw_webhooks]
@@ -796,7 +820,7 @@ HEADER_SEARCH_RE = re.compile(
 )
 
 
-def parse_eas(header: str) -> dict[str, Any]:
+def parse_eas(header: str, user_timezone: str = "America/New_York") -> dict[str, Any]:
     """Parse the EAS header and return a dictionary with the parsed fields.
 
     The input header format is expected to be:
@@ -826,6 +850,8 @@ def parse_eas(header: str) -> dict[str, Any]:
 
     Args:
         header: The EAS header string to parse.
+        user_timezone: The timezone to use for local timestamp conversion
+            (default: America/New_York).
 
     Returns:
         A dictionary containing the parsed fields:
@@ -835,6 +861,7 @@ def parse_eas(header: str) -> dict[str, Any]:
         - duration_minutes: Duration in minutes
         - duration_raw: Raw duration string
         - start_utc: Start time in ISO UTC format
+        - timestamp_local: Start time in configured timezone format
         - timestamp_raw: Raw timestamp string
         - sender: Sender ID
         - event_name: Human-readable event name (if available)
@@ -873,12 +900,12 @@ def parse_eas(header: str) -> dict[str, Any]:
         "%Y-%m-%dT%H:%MZ"
     )
 
-    timestamp_et = (
+    timestamp_local = (
         (
             datetime(year, 1, 1, tzinfo=timezone.utc)
             + timedelta(days=jjj - 1, hours=hh, minutes=mm)
         )
-        .astimezone(ZoneInfo("America/New_York"))
+        .astimezone(ZoneInfo(user_timezone))
         .isoformat(timespec="minutes")
     )
 
@@ -896,7 +923,7 @@ def parse_eas(header: str) -> dict[str, Any]:
         "duration_raw": g["dur"],
         "start_utc": start_utc,
         "timestamp_raw": g["ts"],
-        "timestamp_et": timestamp_et,
+        "timestamp_local": timestamp_local,
         "sender": sender,
         "event_name": EAS_EVENT_NAMES.get(g["event"], "Unknown"),
         "raw_header": header,
@@ -1023,8 +1050,8 @@ class Discord:  # pylint: disable=too-few-public-methods
             },
             # Timestamp Raw
             {
-                "name": "Start (ET)",
-                "value": eas_fields.get("timestamp_et", "Not found"),
+                "name": "Start (Local)",
+                "value": eas_fields.get("timestamp_local", "Not found"),
                 "inline": True,
             },
             # All location codes
@@ -1079,7 +1106,7 @@ class GroupMe:  # pylint: disable=too-few-public-methods
         event_name = eas_fields.get("event_name", "Unknown Event")
         locs_str = ", ".join(eas_fields.get("locs", [])) or "Not found"
         duration = eas_fields.get("duration_minutes", "Not found")
-        start_time = eas_fields.get("timestamp_et", "Not found")
+        start_time = eas_fields.get("timestamp_local", "Not found")
 
         full_message = (
             f"EAS Alert: {event_name}\n\n"
@@ -1232,7 +1259,7 @@ def process_serial(  # pylint: disable=too-many-branches, too-many-statements
         for i, line in enumerate(cleaned_lines):
             if HEADER_RE.match(line):  # Strict match for the whole line
                 try:
-                    potential_eas_fields = parse_eas(line)
+                    potential_eas_fields = parse_eas(line, cfg.timezone)
                     eas_fields = potential_eas_fields  # Parsed successfully
                     single_line_header_index = i
                     found_header_on_single_line = True
@@ -1274,7 +1301,7 @@ def process_serial(  # pylint: disable=too-many-branches, too-many-statements
             if header_match_in_joined:
                 candidate_header_str = header_match_in_joined.group(0)
                 try:
-                    eas_fields = parse_eas(candidate_header_str)
+                    eas_fields = parse_eas(candidate_header_str, cfg.timezone)
                     LOGGER.debug(
                         "Attempt 2: Found + parsed EAS header from joined content: %s",
                         eas_fields.get("event_name", candidate_header_str),
@@ -1611,6 +1638,16 @@ def main() -> None:  # pylint: disable=too-many-statements
                 e,
             )
             healthcheck_publisher = None
+
+    # Send startup health check ping if health check publisher is available
+    if healthcheck_publisher:
+        startup_health_manager = HealthCheckManager()
+        startup_health_manager.send_health_check(
+            healthcheck_publisher,
+            cfg.rabbitmq_healthcheck_routing_key,
+            cfg.port,
+        )
+        LOGGER.info("Startup health check ping sent")
 
     try:
         process_serial(cfg, rabbitmq_publisher, healthcheck_publisher)
