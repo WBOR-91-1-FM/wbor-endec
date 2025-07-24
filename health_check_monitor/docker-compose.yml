@@ -2,6 +2,11 @@ services:
   endec-health-monitor:
     build: .
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "30"
     environment:
       - RABBITMQ_URL=${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
       - HEALTH_CHECK_QUEUE=${HEALTH_CHECK_QUEUE:-health_checks}
@@ -18,6 +23,11 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "30"
     ports:
       - "5672:5672"
       - "15672:15672"
