@@ -1,7 +1,7 @@
 IMAGE_NAME = wbor-endec-health-monitor-image
 CONTAINER_NAME = wbor-endec-health-monitor
 NETWORK_NAME = wbor-network
-HOST_DIR =
+HOST_DIR = $(PWD)
 
 # Default to Docker, allow override with DOCKER_TOOL=podman
 DOCKER_TOOL ?= docker
