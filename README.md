@@ -57,7 +57,7 @@ sudo chmod 0644 /etc/wbor-endec/config.json
   "discord_urls": ["https://discord.com/api/webhooks/...", "..."],
   "groupme_bot_ids": ["abcd1234", "efgh5678"],
   "rabbitmq_amqp_url": "amqp://guest:guest@localhost:5672",
-  "rabbbitmq_exchange_name": "wbor-endec"  // Optional, defaults to "wbor-endec"
+  "rabbitmq_exchange_name": "wbor-endec"  // Optional, defaults to "wbor-endec"
 }
 ```
 
@@ -78,6 +78,30 @@ sudo chown root:root /etc/wbor-endec/secrets.json
 
 ## Installation & usage
 
+This project uses `uv` for dependency management (recommended, [installation instructions](https://docs.astral.sh/uv/getting-started/installation/)). You can also use `pip` if preferred.
+
+### Quick Start with Makefile
+
+For development and quick setup, use the included Makefile:
+
+```sh
+# Clone and navigate to repo
+git clone https://github.com/WBOR-91-1-FM/wbor-endec && cd wbor-endec
+
+# Install dependencies and set up development environment
+make dev-setup
+
+# Edit config.json and secrets.json with your configuration
+# (config.json.example will be copied to config.json by dev-setup)
+
+# Run the application
+make run
+```
+
+See more on the [Development page](/development) for available Make commands and additional setup instructions.
+
+### Manual Installation
+
 **Example scenario:**
 
 1. In Sage's [EndecSetD](https://www.sagealertingsystems.com/support-pc.htm), set one of the DB-9 serial COM ports on your ENDEC to output "News Feed". See [section 9.4 (pg. 70) of the ENDEC manual](https://www.sagealertingsystems.com/docs/digital_endec_1_0.pdf) for more info.
@@ -91,11 +115,12 @@ sudo chown root:root /etc/wbor-endec/secrets.json
     This is telling us that the ENDEC feed will come in at `/dev/ttyUSB0`. If you're feeling up to it, assign the device a more user-friendly name by creating a udev rule. See [this guide](https://www.rigacci.org/wiki/doku.php/doc/appunti/linux/sa/renaming_usb_devices) for more info.
 
 4. Clone this repo and navigate to it via `git clone https://github.com/WBOR-91-1-FM/wbor-endec && cd wbor-endec`
-5. Install necessary dependencies via `pip install -r requirements.txt`, or, better yet, activate a virtual environment for this repo *and then* install the dependencies.
+5. Install dependencies:
+   - **Using uv (recommended)**: `uv sync`
 6. Start monitoring the ENDEC by running the script:
 
     ```sh
-    python3 endec.py --config /etc/wbor-endec/config.json
+    uv run python endec.py --config /etc/wbor-endec/config.json
     ```
 
     - Reads public settings from `--config` path

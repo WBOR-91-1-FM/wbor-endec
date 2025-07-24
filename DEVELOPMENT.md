@@ -22,7 +22,7 @@ make help
 
 ### Package Management
 
-- **uv**: Modern Python package manager for fast dependency management
+- **uv**: Modern Python package manager for fast dependency management - [installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
 - **pyproject.toml**: Comprehensive project configuration with dependencies and dev tools
 
 ### Code Quality
