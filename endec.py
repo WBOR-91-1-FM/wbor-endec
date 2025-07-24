@@ -1565,11 +1565,6 @@ def main() -> None:  # pylint: disable=too-many-statements
         return
 
     LOGGER.info("wbor-endec starting on serial port `%s`", cfg.port)
-    LOGGER.info(
-        "Authors: Evan Vander Stoep <@evanvs>, Mason Daugherty <@mdrxy>\n"
-        "Version: 4.1.1\n"
-        "WBOR 91.1 FM [https://wbor.org]\n"
-    )
 
     # Initialize RabbitMQ Publisher if configured
     if cfg.rabbitmq_amqp_url and cfg.rabbitmq_exchange_name:

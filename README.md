@@ -116,7 +116,7 @@ See more on the [Development page](/development) for available Make commands and
 
 4. Clone this repo and navigate to it via `git clone https://github.com/WBOR-91-1-FM/wbor-endec && cd wbor-endec`
 5. Install dependencies:
-   - **Using uv (recommended)**: `uv sync`
+   - **Using uv**: `uv sync`
 6. Start monitoring the ENDEC by running the script:
 
     ```sh
@@ -140,7 +140,7 @@ You will need to change:
 - `{DEVICE}` = the `/dev/` device you found in step 3, e.g. `/dev/ttyUSB0`. IMPORTANT NOTE: Systemd derives the device unit name from the path by converting slashes to dashes, e.g. `/dev/ttyENDEC` → `dev-ttyENDEC.device`. So, if your device is `/dev/ttyUSB0`, the unit name will be `dev-ttyUSB0.device`. You can check this by running `systemctl list-units --type=device` and looking for your device.
 - `Environment=SECRETS_PATH={PATH_TO_SECRETS_JSON}` = path to the `secrets.json` file you created in the previous step (`/etc/wbor-endec/secrets.json`). This is where the script will look for the credentials.
 - Under `ExecStart`
-  - `{PYTHON3_EXEC_PATH}` = directory for your Python executable, e.g. `/home/username/wbor-endec/venv/bin/python`
+  - `{PYTHON3_EXEC_PATH}` = directory for your Python executable, e.g. `/home/username/wbor-endec/.venv/bin/python`
   - `{SCRIPT_PATH}` = path to `endec.py`, e.g. `/home/username/wbor-endec/endec.py`
   - `{PATH_TO_CONFIG_JSON}` = the path to the `config.json` file you created in the previous step (`/etc/wbor-endec/config.json`)
 - `WorkingDirectory` = path to the `wbor-endec` repo folder you cloned, e.g. `/home/username/wbor-endec`

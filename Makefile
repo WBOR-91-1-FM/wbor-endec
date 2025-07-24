@@ -46,7 +46,6 @@ clean: ## Clean up temporary files and caches
 
 # Service management (requires sudo)
 service-install: ## Install systemd service (requires sudo)
-	sudo cp wbor-endec.service /etc/systemd/system/
 	sudo systemctl daemon-reload
 
 service-enable: ## Enable systemd service (requires sudo)
