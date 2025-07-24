@@ -133,6 +133,11 @@ class HealthCheckMonitor:
             body: The message body as bytes.
         """
         try:
+            # Check if this message matches our routing key
+            if method.routing_key != self.routing_key:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
             message = json.loads(body.decode("utf-8"))
             self.last_health_check = datetime.now(timezone.utc)
             # Log with local timezone for readability
