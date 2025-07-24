@@ -136,7 +136,8 @@ class RabbitMQPublisher:
             # Enable publisher confirms, which allows us to confirm that
             # messages have been successfully published to the exchange
             # and not just simply sent to the RabbitMQ server.
-            self._channel.confirm_delivery()
+            # Note: Temporarily disable confirms to debug NACK issue
+            # self._channel.confirm_delivery()
             self.logger.info(
                 "Successfully connected to RabbitMQ and ensured exchange `%s` "
                 "(type: %s)",
@@ -199,7 +200,8 @@ class RabbitMQPublisher:
 
         for attempt in range(retry_attempts):
             try:
-                if self._channel.basic_publish(
+                # Try to publish the message
+                result = self._channel.basic_publish(
                     exchange=self.exchange_name,
                     routing_key=routing_key,
                     body=message_body_str,
@@ -208,22 +210,27 @@ class RabbitMQPublisher:
                         content_type="application/json",
                     ),
                     mandatory=True,  # Important for unroutable messages
-                ):
+                )
+
+                # If publisher confirms are disabled, basic_publish returns None
+                # If confirms are enabled, it returns True/False
+                if result is None or result is True:
                     self.logger.info(
-                        "Successfully published and confirmed message to "
+                        "Successfully published message to "
                         "exchange `%s` with routing key `%s`",
                         self.exchange_name,
                         routing_key,
                     )
                     return True
-                self.logger.warning(
-                    "Message to exchange `%s` with routing key `%s` was "
-                    "NACKed or not confirmed (attempt %d/%d).",
-                    self.exchange_name,
-                    routing_key,
-                    attempt + 1,
-                    retry_attempts,
-                )
+                else:
+                    self.logger.warning(
+                        "Message to exchange `%s` with routing key `%s` was "
+                        "NACKed or not confirmed (attempt %d/%d).",
+                        self.exchange_name,
+                        routing_key,
+                        attempt + 1,
+                        retry_attempts,
+                    )
                 # Handle NACK: could retry, log, or send to DLX.
             except UnroutableError:
                 self.logger.exception(
