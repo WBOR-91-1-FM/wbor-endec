@@ -92,7 +92,7 @@ git clone https://github.com/WBOR-91-1-FM/wbor-endec && cd wbor-endec
 make dev-setup
 
 # Edit config.json and secrets.json with your configuration
-# (config.json.example will be copied to config.json by dev-setup)
+# (config.json template will be created by dev-setup)
 
 # Run the application
 make run

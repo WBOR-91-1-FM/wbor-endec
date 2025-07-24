@@ -68,16 +68,16 @@ service-logs: ## View systemd service logs
 	sudo journalctl -u wbor-endec.service -f
 
 # Environment setup
-config-copy: ## Copy config.json.example to config.json
-	@if [ -f config.json.example ]; then \
-		cp config.json.example config.json; \
-		echo "Copied config.json.example to config.json - please edit with your configuration"; \
+config-create: ## Create config.json template
+	@if [ ! -f config.json ]; then \
+		echo '{\n  "port": "/dev/ttyUSB0",\n  "logfile": "/var/log/wbor-endec/wbor-endec.log",\n  "debug": false\n}' > config.json; \
+		echo "Created config.json template - please edit with your configuration"; \
 	else \
-		echo "config.json.example not found - create it first"; \
+		echo "config.json already exists"; \
 	fi
 
 # Quick development workflow
-dev-setup: install config-copy ## Complete development setup
+dev-setup: install config-create ## Complete development setup
 	@echo "Development setup complete!"
 	@echo "Next steps:"
 	@echo "1. Edit config.json and secrets.json with your configuration"
