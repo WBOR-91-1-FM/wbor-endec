@@ -1,34 +1,28 @@
 IMAGE_NAME = wbor-endec-health-monitor-image
 CONTAINER_NAME = wbor-endec-health-monitor
 NETWORK_NAME = wbor-network
-HOST_DIR = $(PWD)
+HOST_DIR =
 
 # Default to Docker, allow override with DOCKER_TOOL=podman
 DOCKER_TOOL ?= docker
 
-.PHONY: help default q exec logsf build start run stop clean health
-
 default: clean build run logsf
 
-help: ## Show this help message
-	@echo "Available targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+q: clean build run
 
-q: clean build run ## Quick rebuild and run
-
-exec: ## Execute shell in running container
+exec:
 	$(DOCKER_TOOL) exec -it $(CONTAINER_NAME) /bin/bash
 
-logsf: ## Follow container logs
+logsf:
 	$(DOCKER_TOOL) logs -f $(CONTAINER_NAME)
 
-build: ## Build the Docker image
+build:
 	@echo "Building $(IMAGE_NAME)..."
 	$(DOCKER_TOOL) build --quiet -t $(IMAGE_NAME) .
 
-start: run ## Start the container (alias for run)
+start: run
 
-run: stop ## Run the container
+run: stop
 	mkdir -p ${HOST_DIR}/logs
 	$(DOCKER_TOOL) run -d \
 		--restart unless-stopped \
@@ -37,11 +31,10 @@ run: stop ## Run the container
 		--log-driver json-file \
 		--log-opt max-size=30m \
 		--log-opt max-file=30 \
-		--env-file .env \
 		-v ${HOST_DIR}/logs:/app/logs \
 		$(IMAGE_NAME)
 
-stop: ## Stop and remove container
+stop:
 	@echo "Checking if container $(CONTAINER_NAME) is running..."
 	@if [ "$($(DOCKER_TOOL) ps -a -q -f name=$(CONTAINER_NAME))" != "" ]; then \
 		echo "Stopping $(CONTAINER_NAME)..."; \
@@ -52,14 +45,11 @@ stop: ## Stop and remove container
 		echo "No running container with name $(CONTAINER_NAME) found."; \
 	fi
 
-clean: stop ## Clean up (stop container and remove image)
+clean: stop
 	@IMAGE_ID=$($(DOCKER_TOOL) images -q $(IMAGE_NAME)); \
-	if [ "$$IMAGE_ID" ]; then \
-		echo "Removing image $(IMAGE_NAME) with ID $$IMAGE_ID..."; \
-		$(DOCKER_TOOL) rmi $$IMAGE_ID > /dev/null; \
+	if [ "$IMAGE_ID" ]; then \
+		echo "Removing image $(IMAGE_NAME) with ID $IMAGE_ID..."; \
+		$(DOCKER_TOOL) rmi $IMAGE_ID > /dev/null; \
 	else \
 		echo "No image found with name $(IMAGE_NAME)."; \
 	fi
-
-health: ## Check container health status
-	$(DOCKER_TOOL) inspect --format='{{.State.Health.Status}}' $(CONTAINER_NAME)
