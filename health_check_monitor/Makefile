@@ -47,7 +47,7 @@ stop:
 
 clean: stop
 	@IMAGE_ID=$($(DOCKER_TOOL) images -q $(IMAGE_NAME)); \
-	if [ "$IMAGE_ID" ]; then \
+	if [ "$$IMAGE_ID" ]; then \
 		echo "Removing image $(IMAGE_NAME) with ID $IMAGE_ID..."; \
 		$(DOCKER_TOOL) rmi $IMAGE_ID > /dev/null; \
 	else \
