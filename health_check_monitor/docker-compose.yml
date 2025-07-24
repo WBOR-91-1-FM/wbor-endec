@@ -1,0 +1,37 @@
+services:
+  endec-health-monitor:
+    build: .
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      - HEALTH_CHECK_QUEUE=${HEALTH_CHECK_QUEUE:-health_checks}
+      - RABBITMQ_EXCHANGE_NAME=${RABBITMQ_EXCHANGE_NAME:-healthcheck}
+      - RABBITMQ_HEALTHCHECK_ROUTING_KEY=${RABBITMQ_HEALTHCHECK_ROUTING_KEY:-health.wbor-endec}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-300}
+      - TIMEOUT_THRESHOLD_SECONDS=${TIMEOUT_THRESHOLD_SECONDS:-600}
+    depends_on:
+      - rabbitmq
+    networks:
+      - endec-health-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - endec-health-network
+
+volumes:
+  rabbitmq_data:
+
+networks:
+  endec-health-network:
+    driver: bridge

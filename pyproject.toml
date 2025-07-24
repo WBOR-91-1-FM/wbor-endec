@@ -1,0 +1,169 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wbor-endec"
+version = "4.1.1"
+description = "Decode NewsFeed EAS messages from a Sage Digital ENDEC and forward them to Discord, GroupMe or generic webhook URLs"
+authors = [
+    {name = "Evan Vander Stoep", email = "evanvs@bowdoin.edu"},
+    {name = "Mason Daugherty", email = "github@mdrxy.com"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.7"
+dependencies = [
+    "pyserial",
+    "requests",
+    "pika",
+    "backports.zoneinfo; python_version<'3.9'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.12.4",
+    "mypy>=1.0.0",
+    "types-requests",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.12.4",
+    "mypy>=1.0.0",
+    "types-requests",
+]
+
+[tool.ruff]
+# Exclude specific directories and files
+exclude = [
+    ".bzr",
+    ".direnv", 
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+
+# Set line length to match common Python conventions
+line-length = 88
+indent-width = 4
+
+# Python 3.7+
+target-version = "py37"
+
+[tool.ruff.lint]
+select = ["ALL"]
+
+# Disable specific rules that might be too strict or not applicable
+ignore = [
+    # Rules that conflict with formatter
+    "COM812",   # missing-trailing-comma
+    "ISC001",   # single-line-implicit-string-concatenation
+    "D203",     # 1 blank line required before class docstring (conflicts with D211)
+    "D213",     # Multi-line docstring summary should start at the second line (conflicts with D212)
+    
+    # Overly strict
+    "D100",     # Missing docstring in public module
+    "D104",     # Missing docstring in public package
+
+    # Complexity rules - acceptable for business logic in EAS message parsing
+    "C901",     # Function is too complex (EAS parsing logic inherently complex)
+    "PLR0911",  # Too many return statements (error handling requires multiple early returns)
+    "PLR0912",  # Too many branches (business logic requires many conditional paths)
+    "PLR0913",  # Too many arguments (pika callback signatures require many parameters)
+    "PLR0915",  # Too many statements in function (EAS parsing requires many steps)
+    
+    # Exception handling - necessary for robust serial communication
+    "BLE001",   # Catching blind exception (acceptable for hardware fault tolerance)
+    "PERF203",  # Try-except within a loop (necessary for robust network operations)
+    "TRY401",   # Redundant exception in logging.exception (acceptable for clarity)
+    
+    # Function signature and style rules
+    "FBT001",   # Boolean-typed positional argument (acceptable for simple flags)
+    "D107",     # Missing docstring in __init__ (implementation details)
+
+    "ERA001",   # Commented out code
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.pydocstyle]
+# Use Google docstring convention
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore certain rules in test files
+"test_*.py" = [
+    "S101",    # Use of assert in tests is expected
+    "D100",    # Missing module docstring in test files
+    "D103",    # Missing function docstring in test files  
+]
+
+# Allow print statements in scripts
+"*.py" = [
+    "T201",    # Allow print statements in general scripts
+]
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces, rather than tabs
+indent-style = "space"
+
+# Respect magic trailing commas
+skip-magic-trailing-comma = false
+
+# Automatically detect the appropriate line ending
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+# Force imports to be sorted
+force-sort-within-sections = true
+
+[tool.ruff.lint.flake8-quotes]
+# Use double quotes
+docstring-quotes = "double"
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_subclassing_any = false
+
+# Ignore missing imports for libraries that don't have stubs
+[[tool.mypy.overrides]]
+module = [
+    "serial",
+    "serial.*",
+    "pika",
+    "pika.*",
+    "backports.zoneinfo",
+]
+ignore_missing_imports = true
