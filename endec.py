@@ -112,7 +112,6 @@ class RabbitMQPublisher:
         self._channel: BlockingChannel | None = None
         self.logger = logging.getLogger(__name__ + ".RabbitMQPublisher")
         self._connect()
-        self._connect()
 
     def _connect(self) -> None:
         """Handle connection to RabbitMQ server and channel declaration."""
@@ -316,6 +315,27 @@ class HealthCheckManager:
         self.max_healthcheck_failures = 5
         self.last_healthcheck_retry_time: datetime | None = None
 
+    def should_send_health_check(self) -> bool:
+        """Check if it's time to send a health check without actually sending it.
+
+        Returns:
+            True if a health check should be sent, False otherwise.
+        """
+        current_time = datetime.now(timezone.utc)
+
+        # If we've exceeded max failures, only retry every hour
+        if self.healthcheck_failures >= self.max_healthcheck_failures:
+            return (
+                self.last_healthcheck_retry_time is None
+                or current_time - self.last_healthcheck_retry_time >= timedelta(hours=1)
+            )
+
+        # Send health check every hour (or during retry attempts)
+        return bool(
+            self.last_healthcheck_time is None
+            or current_time - self.last_healthcheck_time >= timedelta(hours=1)
+        )
+
     def send_health_check(
         self,
         healthcheck_publisher: RabbitMQPublisher | None,
@@ -324,8 +344,8 @@ class HealthCheckManager:
     ) -> None:
         """Send a health check message to RabbitMQ indicating the system is alive.
 
-        Publishes a heartbeat message with current system status. After max failures,
-        retries every hour to allow recovery if RabbitMQ comes back online.
+        This method should only be called after should_send_health_check() returns True.
+        Publishes a heartbeat message with current system status.
 
         Args:
             healthcheck_publisher: RabbitMQ publisher for health check messages.
@@ -337,70 +357,57 @@ class HealthCheckManager:
 
         current_time = datetime.now(timezone.utc)
 
-        # If we've exceeded max failures, only retry every hour
+        # Update retry time if we were in failure state
         if self.healthcheck_failures >= self.max_healthcheck_failures:
-            # Check if it's time for an hourly retry
-            if (
-                self.last_healthcheck_retry_time is None
-                or current_time - self.last_healthcheck_retry_time >= timedelta(hours=1)
-            ):
+            LOGGER.info(
+                "Attempting hourly health check retry after %d failures",
+                self.healthcheck_failures,
+            )
+            self.last_healthcheck_retry_time = current_time
+
+        health_payload = {
+            "source_application": "wbor-endec",
+            "event_type": "health_check",
+            "timestamp_utc": current_time.isoformat(),
+            "status": "alive",
+            "serial_port": port,
+            "system_info": {
+                "listening_port": port,
+                "application": "wbor-endec",
+                "version": "4.1.1",
+            },
+        }
+
+        if healthcheck_publisher.publish(health_payload, routing_key):
+            self.last_healthcheck_time = current_time
+
+            # If this was a successful retry after failures, log recovery
+            if self.healthcheck_failures >= self.max_healthcheck_failures:
                 LOGGER.info(
-                    "Attempting hourly health check retry after %d failures",
+                    "Health check publishing recovered after %d failures. "
+                    "RabbitMQ connection restored.",
                     self.healthcheck_failures,
                 )
-                self.last_healthcheck_retry_time = current_time
-                # Continue to attempt sending below
-            else:
-                return  # Skip if not time for retry yet
 
-        # Send health check every hour (or during retry attempts)
-        if (
-            self.last_healthcheck_time is None
-            or current_time - self.last_healthcheck_time >= timedelta(hours=1)
-        ):
-            health_payload = {
-                "source_application": "wbor-endec",
-                "event_type": "health_check",
-                "timestamp_utc": current_time.isoformat(),
-                "status": "alive",
-                "serial_port": port,
-                "system_info": {
-                    "listening_port": port,
-                    "application": "wbor-endec",
-                    "version": "4.1.1",
-                },
-            }
+            self.healthcheck_failures = 0  # Reset on success
+            LOGGER.info("Health check message sent successfully")
+        else:
+            # Only increment failures if we haven't reached max yet
+            if self.healthcheck_failures < self.max_healthcheck_failures:
+                self.healthcheck_failures += 1
 
-            if healthcheck_publisher.publish(health_payload, routing_key):
-                self.last_healthcheck_time = current_time
+            LOGGER.error(
+                "Failed to send health check message (attempt %d/%d)",
+                self.healthcheck_failures,
+                self.max_healthcheck_failures,
+            )
 
-                # If this was a successful retry after failures, log recovery
-                if self.healthcheck_failures >= self.max_healthcheck_failures:
-                    LOGGER.info(
-                        "Health check publishing recovered after %d failures. "
-                        "RabbitMQ connection restored.",
-                        self.healthcheck_failures,
-                    )
-
-                self.healthcheck_failures = 0  # Reset on success
-                LOGGER.info("Health check message sent successfully")
-            else:
-                # Only increment failures if we haven't reached max yet
-                if self.healthcheck_failures < self.max_healthcheck_failures:
-                    self.healthcheck_failures += 1
-
-                LOGGER.error(
-                    "Failed to send health check message (attempt %d/%d)",
-                    self.healthcheck_failures,
+            if self.healthcheck_failures >= self.max_healthcheck_failures:
+                LOGGER.warning(
+                    "Maximum health check failures reached (%d). Will retry every "
+                    "hour until RabbitMQ connection is restored.",
                     self.max_healthcheck_failures,
                 )
-
-                if self.healthcheck_failures >= self.max_healthcheck_failures:
-                    LOGGER.warning(
-                        "Maximum health check failures reached (%d). Will retry every "
-                        "hour until RabbitMQ connection is restored.",
-                        self.max_healthcheck_failures,
-                    )
 
 
 # ---------------------------------------------------------------------------
@@ -1423,12 +1430,14 @@ def process_serial(  # pylint: disable=too-many-branches, too-many-statements
                 try:
                     raw_bytes = ser.readline()
                     if not raw_bytes:  # Timeout occurred, loop again
-                        # Send health check during timeout periods
-                        health_manager.send_health_check(
-                            healthcheck_publisher,
-                            cfg.rabbitmq_healthcheck_routing_key,
-                            cfg.port,
-                        )
+                        # Send health check during timeout periods (but only if it's
+                        # time)
+                        if health_manager.should_send_health_check():
+                            health_manager.send_health_check(
+                                healthcheck_publisher,
+                                cfg.rabbitmq_healthcheck_routing_key,
+                                cfg.port,
+                            )
 
                         if (
                             in_message_block
@@ -1642,12 +1651,15 @@ def main() -> None:  # pylint: disable=too-many-statements
     # Send startup health check ping if health check publisher is available
     if healthcheck_publisher:
         startup_health_manager = HealthCheckManager()
-        startup_health_manager.send_health_check(
-            healthcheck_publisher,
-            cfg.rabbitmq_healthcheck_routing_key,
-            cfg.port,
-        )
-        LOGGER.info("Startup health check ping sent")
+        # Force a startup health check by setting last time to None, which will make
+        # should_send_health_check return True
+        if startup_health_manager.should_send_health_check():
+            startup_health_manager.send_health_check(
+                healthcheck_publisher,
+                cfg.rabbitmq_healthcheck_routing_key,
+                cfg.port,
+            )
+            LOGGER.info("Startup health check ping sent")
 
     try:
         process_serial(cfg, rabbitmq_publisher, healthcheck_publisher)
