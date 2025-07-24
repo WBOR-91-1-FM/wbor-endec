@@ -30,6 +30,7 @@ Optional configuration variables:
 - `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Routing key for health check messages (default: `health.wbor-endec`)
 - `CHECK_INTERVAL_SECONDS`: How often to check for timeouts (default: `300`)
 - `TIMEOUT_THRESHOLD_SECONDS`: Timeout threshold before alerting (default: `600`)
+- `TIMEZONE`: Timezone for displaying timestamps in logs and alerts (default: `America/New_York`)
 
 **RabbitMQ Message Routing:**
 The consumer automatically binds the health check queue to the specified exchange with the routing key. This follows the recommended RabbitMQ routing scheme:

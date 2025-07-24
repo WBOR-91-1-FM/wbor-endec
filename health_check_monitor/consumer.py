@@ -10,6 +10,11 @@ import threading
 import time
 from typing import NoReturn
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
 import pika
 import requests
 
@@ -43,6 +48,8 @@ class HealthCheckMonitor:
         self.timeout_threshold = int(
             os.getenv("TIMEOUT_THRESHOLD_SECONDS", "600")
         )  # 10 minutes default
+        self.timezone_str = os.getenv("TIMEZONE", "America/New_York")
+        self.timezone = ZoneInfo(self.timezone_str)
 
         self.last_health_check: datetime | None = None
         self.connection: pika.BlockingConnection | None = None
@@ -53,6 +60,10 @@ class HealthCheckMonitor:
             logger.error("DISCORD_WEBHOOK_URL environment variable is required")
             msg = "Discord webhook URL not configured"
             raise ValueError(msg)
+
+        logger.info(
+            "Health check monitor configured with timezone: %s", self.timezone_str
+        )
 
     def connect_rabbitmq(self) -> None:
         """Connect to RabbitMQ and declare the exchange, queue, and binding."""
@@ -124,7 +135,14 @@ class HealthCheckMonitor:
         try:
             message = json.loads(body.decode("utf-8"))
             self.last_health_check = datetime.now(timezone.utc)
-            logger.info("Received health check: %s", message)
+            # Log with local timezone for readability
+            local_time = self.last_health_check.astimezone(self.timezone)
+            logger.info(
+                "Received health check at %s (%s): %s",
+                local_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                self.timezone_str,
+                message,
+            )
             ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception:
             logger.exception("Error processing health check message")
@@ -148,7 +166,9 @@ class HealthCheckMonitor:
 
             if time_since_last_check.total_seconds() > self.timeout_threshold:
                 seconds_since = int(time_since_last_check.total_seconds())
-                last_check_str = self.last_health_check.strftime("%Y-%m-%d %H:%M:%S")
+                # Convert UTC timestamp to local timezone for display
+                last_check_local = self.last_health_check.astimezone(self.timezone)
+                last_check_str = last_check_local.strftime("%Y-%m-%d %H:%M:%S %Z")
                 alert_message = (
                     "🚨 **WBOR ENDEC Health Check Alert** 🚨\n"
                     f"No health check received from `wbor-endec` for {seconds_since} "
