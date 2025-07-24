@@ -1,4 +1,4 @@
-"""Health check script for the WBOR ENDEC health check monitor container.
+"""Health check script for the wbor-endec health check monitor container.
 
 Verifies that the container can connect to RabbitMQ and access the required
 exchange and queue for health check monitoring.

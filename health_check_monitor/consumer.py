@@ -110,7 +110,7 @@ class HealthCheckMonitor:
             return
 
         try:
-            payload = {"content": message, "username": "WBOR ENDEC Health Monitor"}
+            payload = {"content": message, "username": "wbor-endec Health Monitor"}
             response = requests.post(self.discord_webhook_url, json=payload, timeout=30)
             response.raise_for_status()
             logger.info("Discord alert sent successfully")
