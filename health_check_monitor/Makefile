@@ -37,7 +37,7 @@ run: stop
 
 stop:
 	@echo "Checking if container $(CONTAINER_NAME) is running..."
-	@if [ "$($(DOCKER_TOOL) ps -a -q -f name=$(CONTAINER_NAME))" != "" ]; then \
+	@if [ "$$($(DOCKER_TOOL) ps -a -q -f name=$(CONTAINER_NAME))" != "" ]; then \
 		echo "Stopping $(CONTAINER_NAME)..."; \
 		$(DOCKER_TOOL) stop $(CONTAINER_NAME) > /dev/null; \
 		echo "Removing the container $(CONTAINER_NAME)..."; \
@@ -47,10 +47,15 @@ stop:
 	fi
 
 clean: stop
-	@IMAGE_ID=$($(DOCKER_TOOL) images -q $(IMAGE_NAME)); \
+	@IMAGE_ID=$$($(DOCKER_TOOL) images -q $(IMAGE_NAME)); \
 	if [ "$$IMAGE_ID" ]; then \
-		echo "Removing image $(IMAGE_NAME) with ID $IMAGE_ID..."; \
-		$(DOCKER_TOOL) rmi $IMAGE_ID > /dev/null; \
+		echo "Removing image $(IMAGE_NAME) with ID $$IMAGE_ID..."; \
+		$(DOCKER_TOOL) rmi $$IMAGE_ID > /dev/null; \
 	else \
 		echo "No image found with name $(IMAGE_NAME)."; \
 	fi
+
+health:
+	$(DOCKER_TOOL) inspect --format='{{.State.Health.Status}}' $(CONTAINER_NAME)
+
+.PHONY: default q exec logsf build start run stop clean health
