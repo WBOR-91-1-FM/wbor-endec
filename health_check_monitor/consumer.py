@@ -161,13 +161,22 @@ class HealthCheckMonitor:
             if not self.is_running:
                 break
 
+            logger.info("Running health check timeout monitor...")
             current_time = datetime.now(timezone.utc)
 
             if self.last_health_check is None:
-                logger.warning("No health check messages received yet")
+                logger.warning(
+                    "No health check messages received yet. Waiting for first ping."
+                )
                 continue
 
             time_since_last_check = current_time - self.last_health_check
+
+            logger.info(
+                "Checking timeout: %.1f seconds since last ping (threshold: %d seconds)",
+                time_since_last_check.total_seconds(),
+                self.timeout_threshold,
+            )
 
             if time_since_last_check.total_seconds() > self.timeout_threshold:
                 seconds_since = int(time_since_last_check.total_seconds())
@@ -189,8 +198,11 @@ class HealthCheckMonitor:
                 )
                 self.send_discord_alert(alert_message)
 
-                # Reset to avoid spam alerts
-                self.last_health_check = current_time
+                # After sending an alert, wait for a new health check to arrive
+                # before clearing the alert condition. By not resetting the timer
+                # here, we ensure that the timeout condition persists until a
+                # new, valid health check is received.
+                self.last_health_check = None
 
     def _ensure_channel(self) -> None:
         """Ensure RabbitMQ channel is established.

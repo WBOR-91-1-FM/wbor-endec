@@ -60,6 +60,10 @@ service-stop: ## Stop systemd service (requires sudo)
 service-restart: ## Restart systemd service (requires sudo)
 	sudo systemctl restart wbor-endec.service
 
+service-update: ## Update systemd service (requires sudo)
+	sudo systemctl daemon-reload
+	sudo systemctl restart wbor-failsafe-notifier.service
+
 service-status: ## Check systemd service status
 	sudo systemctl status wbor-endec.service
 
